@@ -366,8 +366,12 @@ function renderHeader() {
   div.className = "app-header";
   div.innerHTML = `
     <button class="how-to-play-btn" id="howToPlayBtn">How to Play</button>
-    <h1 class="brand">Hoops IQ</h1>
+    <div class="brand-row">
+      <img class="brand-logo" src="logo.png" alt="Quizzy logo" />
+      <h1 class="brand">Quizzy</h1>
+    </div>
     <p class="tagline">Wager your NBA knowledge, one round at a time.</p>
+    <div class="brand-dots"><span></span><span></span><span></span></div>
   `;
   div.querySelector("#howToPlayBtn").addEventListener("click", () => {
     state.showHowToPlay = true;
