@@ -2,9 +2,13 @@
 let decadeQuestions = [];
 let playerCareerQuestions = [];
 let thisOrThatPool = {};
+let collegeQuestions = [];
+let collegesSearch = [];
+let draftQuestions = [];
 let playersSearch = [];
+let fillBlankBoards = [];
 
-const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat"];
+const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank"];
 
 const TOPIC_META = {
   decade: {
@@ -22,7 +26,23 @@ const TOPIC_META = {
     title: "This or That",
     color: "var(--accent-3)",
     description:
-      "You'll face 3 head-to-head match-ups, one at a time, for a randomly picked career stat — guess who had more of it, all three times, to win.",
+      "You'll see 3 head-to-head match-ups for a randomly picked career stat, all at once — guess who had more in each, and get all three right to win.",
+  },
+  college: {
+    title: "College",
+    color: "var(--accent-4)",
+    description: "You'll get a random All-Star's name — guess which college they played for.",
+  },
+  draft: {
+    title: "Draft",
+    color: "var(--accent-5)",
+    description: "You'll get a draft year, round, pick, and team — guess which player it was.",
+  },
+  fillBlank: {
+    title: "Fill in the Blank",
+    color: "var(--accent-6)",
+    description:
+      "You'll see a Top 5 stat leaderboard — for a season, a career, or the playoffs — with one player blanked out. Guess who's missing.",
   },
 };
 
@@ -33,34 +53,109 @@ const HINTS = {
   ],
   playerCareer: [
     { key: "pos", label: "Position (per season)" },
-    { key: "team", label: "Team (per season)" },
+    { key: "awards", label: "Awards (per season)" },
   ],
-  thisOrThat: [],
+  thisOrThat: [
+    { key: "g", label: "Career Games Played" },
+    { key: "mpg", label: "Career Minutes Per Game" },
+  ],
+  college: [
+    { key: "conference", label: "Conference", value: (q) => q.conference },
+    { key: "mascot", label: "Mascot", value: (q) => q.mascot },
+  ],
+  draft: [
+    { key: "pos", label: "Position", value: (q) => q.pos },
+    { key: "college", label: "College", value: (q) => q.college },
+  ],
+  fillBlank: [
+    { key: "pos", label: "Position", value: (q) => q.pos },
+    { key: "team", label: "Team(s)", value: (q) => q.team },
+  ],
 };
+
+const DIFFICULTY_LEVELS = {
+  easy: { label: "Easy", description: "2000-Present", cutoffYear: 2000 },
+  medium: { label: "Medium", description: "1980-Present", cutoffYear: 1980 },
+  hard: { label: "Hard", description: "All-Time", cutoffYear: 0 },
+};
+
+const QUESTION_TIME_SECONDS = 60;
 
 // ---------- State ----------
 function freshState() {
   return {
     screen: "start",
     gameLength: 5,
+    difficulty: "medium",
     totalScore: 0,
     usedWagers: new Set(),
     round: 0,
     history: [],
-    usedQuestionIds: { decade: new Set(), playerCareer: new Set(), thisOrThat: new Set() },
+    usedQuestionIds: {
+      decade: new Set(),
+      playerCareer: new Set(),
+      thisOrThat: new Set(),
+      college: new Set(),
+      draft: new Set(),
+      fillBlank: new Set(),
+    },
     wheelRotation: 0,
+    showHowToPlay: false,
     current: {
       topic: null,
       question: null,
       wager: null,
       hintsRevealed: [],
       selectedPlayer: null,
-      totIndex: 0,
-      totResults: [],
+      selectedCollege: null,
+      totSelections: [null, null, null],
+      totSubmitted: false,
     },
   };
 }
 let state = freshState();
+
+// ---------- Timer ----------
+let timerInterval = null;
+let timerSecondsLeft = QUESTION_TIME_SECONDS;
+let timerActiveKey = null;
+let timerOnTimeout = null;
+
+function formatTimer(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function ensureTimer(key, onTimeout) {
+  timerOnTimeout = onTimeout;
+  if (timerActiveKey === key) return;
+  clearInterval(timerInterval);
+  timerActiveKey = key;
+  timerSecondsLeft = QUESTION_TIME_SECONDS;
+  timerInterval = setInterval(() => {
+    timerSecondsLeft -= 1;
+    const el = document.getElementById("timerDisplay");
+    if (el) el.textContent = formatTimer(Math.max(timerSecondsLeft, 0));
+    if (timerSecondsLeft <= 0) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+      if (timerOnTimeout) timerOnTimeout();
+    }
+  }, 1000);
+}
+
+function resetTimer() {
+  timerSecondsLeft = QUESTION_TIME_SECONDS;
+  const el = document.getElementById("timerDisplay");
+  if (el) el.textContent = formatTimer(timerSecondsLeft);
+}
+
+function stopTimer() {
+  clearInterval(timerInterval);
+  timerInterval = null;
+  timerActiveKey = null;
+}
 
 // ---------- Utilities ----------
 function shuffle(arr) {
@@ -72,47 +167,89 @@ function shuffle(arr) {
   return a;
 }
 
+function cutoffYear() {
+  return DIFFICULTY_LEVELS[state.difficulty].cutoffYear;
+}
+
 function pickThisOrThatQuestion() {
+  const cutoff = cutoffYear();
   const statKeys = Object.keys(thisOrThatPool);
   const statKey = statKeys[Math.floor(Math.random() * statKeys.length)];
-  const pool = thisOrThatPool[statKey];
-  const used = state.usedQuestionIds.thisOrThat;
+  const fullPool = thisOrThatPool[statKey];
 
-  let indices = pool.pairs.map((_, i) => i).filter((i) => !used.has(`${statKey}:${i}`));
-  if (indices.length < 3) {
+  const eligible = fullPool.pairs
+    .map((pair, i) => ({ pair, i }))
+    .filter(({ pair }) => pair[0].fromYear >= cutoff && pair[1].fromYear >= cutoff);
+
+  const used = state.usedQuestionIds.thisOrThat;
+  let candidates = eligible.filter(({ i }) => !used.has(`${statKey}:${i}`));
+  if (candidates.length < 3) {
     used.clear();
-    indices = pool.pairs.map((_, i) => i);
+    candidates = eligible;
   }
-  indices = shuffle(indices);
+  candidates = shuffle(candidates);
 
   const chosen = [];
   const usedPlayers = new Set();
-  for (const idx of indices) {
-    const [a, b] = pool.pairs[idx];
-    if (usedPlayers.has(a.id) || usedPlayers.has(b.id)) continue;
-    chosen.push(idx);
-    usedPlayers.add(a.id);
-    usedPlayers.add(b.id);
+  for (const entry of candidates) {
+    if (usedPlayers.has(entry.pair[0].id) || usedPlayers.has(entry.pair[1].id)) continue;
+    chosen.push(entry);
+    usedPlayers.add(entry.pair[0].id);
+    usedPlayers.add(entry.pair[1].id);
     if (chosen.length === 3) break;
   }
-  for (const idx of indices) {
+  for (const entry of candidates) {
     if (chosen.length >= 3) break;
-    if (!chosen.includes(idx)) chosen.push(idx);
+    if (!chosen.some((c) => c.i === entry.i)) chosen.push(entry);
   }
 
-  chosen.forEach((idx) => used.add(`${statKey}:${idx}`));
-  const pairs = chosen.map((idx) => {
-    const [a, b] = pool.pairs[idx];
-    return Math.random() < 0.5 ? [a, b] : [b, a];
-  });
+  chosen.forEach(({ i }) => used.add(`${statKey}:${i}`));
+  const pairs = chosen.map(({ pair }) => (Math.random() < 0.5 ? [pair[0], pair[1]] : [pair[1], pair[0]]));
 
-  return { statKey, statLabel: pool.label, pairs };
+  return { statKey, statLabel: fullPool.label, pairs };
+}
+
+function pickFillBlankQuestion() {
+  const cutoff = cutoffYear();
+  // all-time / all-time-playoffs boards are fixed historical facts, so they're
+  // not filtered by difficulty - only season-scope boards are
+  const eligible = fillBlankBoards.filter((b) => b.scope !== "season" || b.seasonYear >= cutoff);
+
+  const used = state.usedQuestionIds.fillBlank;
+  let candidates = eligible.filter((b) => !used.has(b.id));
+  if (candidates.length === 0) {
+    used.clear();
+    candidates = eligible;
+  }
+  const board = candidates[Math.floor(Math.random() * candidates.length)];
+  used.add(board.id);
+
+  const blankIndex = Math.floor(Math.random() * board.players.length);
+  const blanked = board.players[blankIndex];
+  return {
+    ...board,
+    blankIndex,
+    answerId: blanked.playerId,
+    answerName: blanked.name,
+    pos: blanked.pos,
+    team: blanked.team,
+  };
 }
 
 function pickQuestion(topic) {
   if (topic === "thisOrThat") return pickThisOrThatQuestion();
+  if (topic === "fillBlank") return pickFillBlankQuestion();
 
-  const pool = topic === "decade" ? decadeQuestions : playerCareerQuestions;
+  const cutoff = cutoffYear();
+  const poolByTopic = {
+    decade: decadeQuestions,
+    playerCareer: playerCareerQuestions,
+    college: collegeQuestions,
+    draft: draftQuestions,
+  };
+  const fullPool = poolByTopic[topic];
+  const pool = fullPool.filter((q) => (topic === "decade" ? q.decade >= cutoff : q.fromYear >= cutoff));
+
   const used = state.usedQuestionIds[topic];
   let candidates = pool.filter((q) => !used.has(q.id));
   if (candidates.length === 0) {
@@ -131,6 +268,35 @@ function computePayout(wager, hintCount, correct) {
   return correct ? wager * WIN_MULTIPLIER[hintCount] : -(wager * LOSS_MULTIPLIER[hintCount]);
 }
 
+// Full stakes table for every hint count, so the user can see the whole
+// risk/reward trade-off up front instead of just the tier they're currently at.
+function renderStakesTable(wager, currentHintCount) {
+  const rows = [0, 1, 2]
+    .map((n) => {
+      const win = computePayout(wager, n, true);
+      const lose = computePayout(wager, n, false);
+      const isCurrent = n === currentHintCount;
+      return `
+        <div class="stakes-row${isCurrent ? " stakes-row-current" : ""}">
+          <span class="stakes-hints">${n} hint${n === 1 ? "" : "s"}</span>
+          <span class="stakes-win score-positive">+${win}</span>
+          <span class="stakes-lose score-negative">${lose}</span>
+        </div>
+      `;
+    })
+    .join("");
+  return `
+    <div class="stakes-table">
+      <div class="stakes-row stakes-row-head">
+        <span class="stakes-hints">Hints used</span>
+        <span>Correct</span>
+        <span>Wrong</span>
+      </div>
+      ${rows}
+    </div>
+  `;
+}
+
 function maxWager() {
   return state.gameLength;
 }
@@ -145,16 +311,39 @@ function questionText(topic, q) {
   if (topic === "decade") {
     return `In the <span class="hl">${q.decadeLabel}</span>, which player led the <span class="hl">${q.teamName}</span> in <span class="hl">${q.statLabel.toLowerCase()}</span>, with <span class="hl">${q.value.toLocaleString()}</span>?`;
   }
+  if (topic === "college") {
+    return `Which college did <span class="hl">${q.name}</span> play for?`;
+  }
+  if (topic === "draft") {
+    return `In the <span class="hl">${q.draftYear}</span> draft, round <span class="hl">${q.round}</span>, pick <span class="hl">${q.pick}</span>, the <span class="hl">${q.teamName}</span> selected... who?`;
+  }
+  if (topic === "fillBlank") {
+    return `Here's the <span class="hl">${q.scopeLabel}</span> Top 5 in <span class="hl">${q.statLabel}</span> — one name is missing. Who is it?`;
+  }
   return `Here's a mystery player's season-by-season stat line. Who is it?`;
 }
 
 function correctAnswerName(topic, q) {
-  return topic === "decade" ? q.answerName : q.name;
+  if (topic === "decade") return q.answerName;
+  if (topic === "college") return q.college;
+  if (topic === "fillBlank") return q.answerName;
+  return q.name;
 }
 
 function isCorrectGuess(topic, q, selectedId) {
+  if (topic === "college") return selectedId === q.college;
+  if (topic === "fillBlank") return selectedId === q.answerId;
   const answerId = topic === "decade" ? q.answerId : q.playerId;
   return selectedId === answerId;
+}
+
+function countThisOrThatCorrect(q, selections) {
+  return selections.reduce((count, sel, i) => {
+    if (sel === null || sel === undefined) return count;
+    const pair = q.pairs[i];
+    const isCorrect = pair[sel].value === Math.max(pair[0].value, pair[1].value);
+    return count + (isCorrect ? 1 : 0);
+  }, 0);
 }
 
 // ---------- Rendering ----------
@@ -167,16 +356,62 @@ function render() {
   wrap.appendChild(renderHeader());
   wrap.appendChild(renderScreen());
   app.appendChild(wrap);
+  if (state.showHowToPlay) {
+    app.appendChild(renderHowToPlayModal());
+  }
 }
 
 function renderHeader() {
   const div = document.createElement("div");
-  div.style.textAlign = "center";
-  div.style.display = "flex";
-  div.style.flexDirection = "column";
-  div.style.gap = "6px";
-  div.innerHTML = `<h1 class="brand">Hoops IQ</h1><p class="tagline">Wager your NBA knowledge, one round at a time.</p>`;
+  div.className = "app-header";
+  div.innerHTML = `
+    <button class="how-to-play-btn" id="howToPlayBtn">How to Play</button>
+    <h1 class="brand">Hoops IQ</h1>
+    <p class="tagline">Wager your NBA knowledge, one round at a time.</p>
+  `;
+  div.querySelector("#howToPlayBtn").addEventListener("click", () => {
+    state.showHowToPlay = true;
+    render();
+  });
   return div;
+}
+
+function renderHowToPlayModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <h2 class="screen-title">How to Play</h2>
+      <div class="modal-body">
+        <p><strong>1. Set up your game.</strong> Choose 5 or 10 questions, and a difficulty: Easy (2000-Present), Medium (1980-Present), or Hard (All-Time).</p>
+        <p><strong>2. Spin the wheel.</strong> It lands on one of six categories.</p>
+        <p><strong>3. Wager points.</strong> Pick a number from 1 up to your game length — each number can only be used once per game.</p>
+        <p><strong>4. Beat the clock.</strong> You get 60 seconds to answer. Revealing a hint resets the clock back to 60. Run out of time and it's scored as a wrong answer.</p>
+        <p><strong>5. Hints cost you.</strong> Fewer hints used means a bigger reward for a correct answer, and a smaller penalty for a wrong one.</p>
+        <ul>
+          <li><strong>Decade Team Leader:</strong> guess who led a given team in a stat during a given decade. Hints: position, years active.</li>
+          <li><strong>Player Career:</strong> guess the mystery player from their season-by-season stat table. Hints: position and awards, shown per season.</li>
+          <li><strong>This or That:</strong> pick the player with more of a career stat, in 3 match-ups shown all at once. Get all three right to win, or the round is lost. Hints: career games played, career minutes per game (shown for all 6 players at once).</li>
+          <li><strong>College:</strong> guess which college a random All-Star played for. Hints: conference, mascot.</li>
+          <li><strong>Draft:</strong> guess the player from their draft year, round, pick, and team. Hints: position, college.</li>
+          <li><strong>Fill in the Blank:</strong> guess the missing player from a Top 5 stat leaderboard (a season, an all-time career, or an all-time playoff career). Hints: position, team(s).</li>
+        </ul>
+        <p>Rack up points across every round and see how high you can score!</p>
+      </div>
+      <button class="btn btn-primary btn-lg" id="closeHowToPlay">Got It</button>
+    </div>
+  `;
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) {
+      state.showHowToPlay = false;
+      render();
+    }
+  });
+  overlay.querySelector("#closeHowToPlay").addEventListener("click", () => {
+    state.showHowToPlay = false;
+    render();
+  });
+  return overlay;
 }
 
 function statusBar() {
@@ -197,6 +432,14 @@ function progressBar() {
   const pct = (state.round / state.gameLength) * 100;
   div.innerHTML = `<div class="progress-fill" style="width:${pct}%"></div>`;
   return div;
+}
+
+function renderTimer() {
+  const el = document.createElement("div");
+  el.className = "timer-display";
+  el.id = "timerDisplay";
+  el.textContent = formatTimer(timerSecondsLeft);
+  return el;
 }
 
 function renderScreen() {
@@ -227,11 +470,30 @@ function screenStart() {
         <div class="length-label">Full Game</div>
       </button>
     </div>
+    <h2 class="screen-title">Choose your difficulty</h2>
+    <div class="choice-row">
+      ${Object.entries(DIFFICULTY_LEVELS)
+        .map(
+          ([key, d]) => `
+        <button class="length-card difficulty-card ${state.difficulty === key ? "selected" : ""}" data-diff="${key}">
+          <div class="difficulty-label">${d.label}</div>
+          <div class="length-label">${d.description}</div>
+        </button>
+      `
+        )
+        .join("")}
+    </div>
     <button class="btn btn-primary btn-lg" id="startBtn">Start Game</button>
   `;
-  card.querySelectorAll(".length-card").forEach((btn) => {
+  card.querySelectorAll(".length-card[data-len]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.gameLength = Number(btn.dataset.len);
+      render();
+    });
+  });
+  card.querySelectorAll(".difficulty-card").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.difficulty = btn.dataset.diff;
       render();
     });
   });
@@ -246,12 +508,17 @@ function screenWheel() {
   const card = document.createElement("div");
   card.className = "card";
 
-  const cyclesCount = 2;
-  const segTopics = [];
-  for (let i = 0; i < cyclesCount; i++) segTopics.push(...TOPIC_ORDER);
+  const segTopics = TOPIC_ORDER.slice();
   const segCount = segTopics.length;
   const segAngle = 360 / segCount;
-  const segColorHex = { decade: "#ff6b35", playerCareer: "#0071e3", thisOrThat: "#22a06b" };
+  const segColorHex = {
+    decade: "#ff6b35",
+    playerCareer: "#0071e3",
+    thisOrThat: "#22a06b",
+    college: "#a855f7",
+    draft: "#e0357a",
+    fillBlank: "#f2b705",
+  };
   const gradientStops = segTopics
     .map((t, i) => `${segColorHex[t]} ${i * segAngle}deg ${(i + 1) * segAngle}deg`)
     .join(", ");
@@ -264,7 +531,11 @@ function screenWheel() {
         ${segTopics
           .map((t, i) => {
             const angle = i * segAngle + segAngle / 2;
-            return `<div class="wheel-label" style="transform: rotate(${angle}deg);">${TOPIC_META[t].title}</div>`;
+            const rad = (angle * Math.PI) / 180;
+            const radius = 108;
+            const dx = radius * Math.sin(rad);
+            const dy = -radius * Math.cos(rad);
+            return `<div class="wheel-label" style="left: calc(50% + ${dx}px); top: calc(50% + ${dy}px);">${TOPIC_META[t].title}</div>`;
           })
           .join("")}
         <div class="wheel-hub"></div>
@@ -296,8 +567,11 @@ function screenWheel() {
     setTimeout(() => {
       state.current.topic = topic;
       state.current.question = pickQuestion(topic);
-      state.current.totIndex = 0;
-      state.current.totResults = [];
+      state.current.totSelections = [null, null, null];
+      state.current.totSubmitted = false;
+      state.current.selectedPlayer = null;
+      state.current.selectedCollege = null;
+      state.current.hintsRevealed = [];
       resultEl.textContent = `${TOPIC_META[topic].title}!`;
       resultEl.style.color = TOPIC_META[topic].color;
       setTimeout(() => {
@@ -374,9 +648,29 @@ function screenQuestion() {
 
   const q = state.current.question;
 
+  ensureTimer(`round-${state.round}`, () => {
+    const hintCount = state.current.hintsRevealed.length;
+    const delta = computePayout(state.current.wager, hintCount, false);
+    state.totalScore += delta;
+    state.history.push({
+      topic,
+      wager: state.current.wager,
+      hints: hintCount,
+      correct: false,
+      delta,
+      answer: correctAnswerName(topic, q),
+      guessed: "(ran out of time)",
+    });
+    stopTimer();
+    state.screen = "result";
+    render();
+  });
+
   const badge = document.createElement("div");
   badge.innerHTML = `<span class="topic-badge" style="color:${TOPIC_META[topic].color}">${TOPIC_META[topic].title}</span>`;
   card.appendChild(badge);
+
+  card.appendChild(renderTimer());
 
   const qBlock = document.createElement("div");
   qBlock.className = "question-block";
@@ -385,6 +679,9 @@ function screenQuestion() {
 
   if (topic === "playerCareer") {
     card.appendChild(renderPlayerCareerTable(q, state.current.hintsRevealed));
+  }
+  if (topic === "fillBlank") {
+    card.appendChild(renderFillBlankBoard(q));
   }
 
   const reminder = document.createElement("div");
@@ -410,6 +707,7 @@ function screenQuestion() {
     btn.addEventListener("click", () => {
       if (!state.current.hintsRevealed.includes(hint.key)) {
         state.current.hintsRevealed.push(hint.key);
+        resetTimer();
         render();
       }
     });
@@ -418,22 +716,20 @@ function screenQuestion() {
   card.appendChild(hintRow);
 
   const hintCount = state.current.hintsRevealed.length;
-  const payoutWin = computePayout(state.current.wager, hintCount, true);
-  const payoutLose = computePayout(state.current.wager, hintCount, false);
-  const payoutPreview = document.createElement("div");
-  payoutPreview.className = "payout-preview";
-  payoutPreview.innerHTML = `Correct: <strong class="score-positive">+${payoutWin}</strong> &nbsp;·&nbsp; Wrong: <strong class="score-negative">${payoutLose}</strong> &nbsp;<span style="opacity:.6">(${hintCount} hint${hintCount === 1 ? "" : "s"} used)</span>`;
-  card.appendChild(payoutPreview);
+  const stakes = document.createElement("div");
+  stakes.innerHTML = renderStakesTable(state.current.wager, hintCount);
+  card.appendChild(stakes);
 
-  card.appendChild(renderPlayerSearch());
+  card.appendChild(topic === "college" ? renderCollegeSearch() : renderPlayerSearch());
 
   const submitBtn = document.createElement("button");
   submitBtn.className = "btn btn-primary btn-lg";
   submitBtn.textContent = "Submit Guess";
-  submitBtn.disabled = !state.current.selectedPlayer;
+  const selectedAnswer = topic === "college" ? state.current.selectedCollege : state.current.selectedPlayer;
+  submitBtn.disabled = !selectedAnswer;
   submitBtn.addEventListener("click", () => {
-    const guessedId = state.current.selectedPlayer.id;
-    const correct = isCorrectGuess(topic, q, guessedId);
+    const guessed = topic === "college" ? state.current.selectedCollege : state.current.selectedPlayer.id;
+    const correct = isCorrectGuess(topic, q, guessed);
     const delta = computePayout(state.current.wager, hintCount, correct);
     state.totalScore += delta;
     state.history.push({
@@ -443,8 +739,9 @@ function screenQuestion() {
       correct,
       delta,
       answer: correctAnswerName(topic, q),
-      guessed: state.current.selectedPlayer.name,
+      guessed: topic === "college" ? state.current.selectedCollege : state.current.selectedPlayer.name,
     });
+    stopTimer();
     state.screen = "result";
     render();
   });
@@ -455,22 +752,24 @@ function screenQuestion() {
 
 function renderPlayerCareerTable(q, hintsRevealed) {
   const showPos = hintsRevealed.includes("pos");
-  const showTeam = hintsRevealed.includes("team");
+  const showAwards = hintsRevealed.includes("awards");
 
   const wrap = document.createElement("div");
   wrap.className = "career-table-wrap";
 
   const headCells = ["Season"];
   if (showPos) headCells.push("Pos");
-  if (showTeam) headCells.push("Team");
-  headCells.push("G", "GS", "PTS", "REB", "AST", "BLK", "STL");
+  headCells.push("Team", "G", "GS", "PTS", "REB", "AST", "BLK", "STL");
+  if (showAwards) headCells.push("Awards");
+
+  const fmt1 = (v) => (typeof v === "number" ? v.toFixed(1) : v);
 
   const bodyRows = q.seasons
     .map((s) => {
       const cells = [s.season];
       if (showPos) cells.push(s.pos || "—");
-      if (showTeam) cells.push(s.team || "—");
-      cells.push(s.g, s.gs, s.pts.toFixed(1), s.trb.toFixed(1), s.ast.toFixed(1), s.blk.toFixed(1), s.stl.toFixed(1));
+      cells.push(s.team || "—", s.g, s.gs, fmt1(s.pts), fmt1(s.trb), fmt1(s.ast), fmt1(s.blk), fmt1(s.stl));
+      if (showAwards) cells.push(s.awards || "—");
       return `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
     })
     .join("");
@@ -479,6 +778,28 @@ function renderPlayerCareerTable(q, hintsRevealed) {
     <table class="career-table">
       <thead><tr>${headCells.map((c) => `<th>${c}</th>`).join("")}</tr></thead>
       <tbody>${bodyRows}</tbody>
+    </table>
+  `;
+  return wrap;
+}
+
+function renderFillBlankBoard(q) {
+  const wrap = document.createElement("div");
+  wrap.className = "career-table-wrap fill-blank-wrap";
+
+  const rows = q.players
+    .map((p, i) => {
+      const isBlank = i === q.blankIndex;
+      const valueStr = q.measure === "perGame" ? p.value.toFixed(1) : p.value.toLocaleString();
+      const nameCell = isBlank ? `<span class="fb-blank">???</span>` : p.name;
+      return `<tr${isBlank ? ' class="fb-blank-row"' : ""}><td>${i + 1}</td><td>${nameCell}</td><td>${valueStr}</td></tr>`;
+    })
+    .join("");
+
+  wrap.innerHTML = `
+    <table class="career-table fill-blank-table">
+      <thead><tr><th>Rank</th><th>Player</th><th>${q.statLabel}</th></tr></thead>
+      <tbody>${rows}</tbody>
     </table>
   `;
   return wrap;
@@ -538,6 +859,60 @@ function renderPlayerSearch() {
   return wrap;
 }
 
+function renderCollegeSearch() {
+  const wrap = document.createElement("div");
+  wrap.className = "search-wrap";
+
+  if (state.current.selectedCollege) {
+    wrap.innerHTML = `
+      <div class="selected-player">
+        <span>${state.current.selectedCollege}</span>
+        <button id="changeCollegeBtn">Change</button>
+      </div>
+    `;
+    wrap.querySelector("#changeCollegeBtn").addEventListener("click", () => {
+      state.current.selectedCollege = null;
+      render();
+    });
+    return wrap;
+  }
+
+  wrap.innerHTML = `
+    <input type="text" class="search-input" id="collegeSearchInput" placeholder="Search for a college..." autocomplete="off" />
+    <div class="search-results" id="collegeSearchResults" style="display:none;"></div>
+  `;
+
+  const input = wrap.querySelector("#collegeSearchInput");
+  const results = wrap.querySelector("#collegeSearchResults");
+
+  input.addEventListener("input", () => {
+    const term = input.value.trim().toLowerCase();
+    if (term.length < 2) {
+      results.style.display = "none";
+      results.innerHTML = "";
+      return;
+    }
+    const matches = collegesSearch.filter((c) => c.toLowerCase().includes(term)).slice(0, 8);
+    if (matches.length === 0) {
+      results.style.display = "none";
+      results.innerHTML = "";
+      return;
+    }
+    results.innerHTML = matches
+      .map((c) => `<div class="search-result-item" data-college="${c.replace(/"/g, "&quot;")}">${c}</div>`)
+      .join("");
+    results.style.display = "block";
+    results.querySelectorAll(".search-result-item").forEach((item) => {
+      item.addEventListener("click", () => {
+        state.current.selectedCollege = item.dataset.college;
+        render();
+      });
+    });
+  });
+
+  return wrap;
+}
+
 function screenThisOrThat() {
   const card = document.createElement("div");
   card.className = "card";
@@ -545,112 +920,168 @@ function screenThisOrThat() {
   card.appendChild(statusBar());
 
   const q = state.current.question;
-  const idx = state.current.totIndex;
-  const results = state.current.totResults;
+  const topic = "thisOrThat";
+  const revealed = state.current.totSubmitted;
+
+  const hintCount = state.current.hintsRevealed.length;
+
+  if (!revealed) {
+    ensureTimer(`round-${state.round}`, () => {
+      const correctCount = countThisOrThatCorrect(q, state.current.totSelections);
+      const delta = computePayout(state.current.wager, hintCount, false);
+      state.totalScore += delta;
+      state.history.push({
+        topic,
+        wager: state.current.wager,
+        hints: hintCount,
+        correct: false,
+        delta,
+        statLabel: q.statLabel,
+        correctCount,
+      });
+      stopTimer();
+      state.screen = "result";
+      render();
+    });
+  }
 
   const badge = document.createElement("div");
   badge.innerHTML = `<span class="topic-badge" style="color:${TOPIC_META.thisOrThat.color}">${TOPIC_META.thisOrThat.title}</span>`;
   card.appendChild(badge);
 
+  if (!revealed) card.appendChild(renderTimer());
+
   const header = document.createElement("div");
   header.className = "question-block";
-  header.innerHTML = `
-    <div class="question-text">Who had more <span class="hl">${q.statLabel}</span>?</div>
-    <div class="wager-reminder">Match-up <strong>${Math.min(idx + 1, 3)}</strong> of 3 &nbsp;·&nbsp; Wagering <strong>${state.current.wager}</strong> point${state.current.wager === 1 ? "" : "s"}</div>
+  header.innerHTML = revealed
+    ? `<div class="question-text">Who had more <span class="hl">${q.statLabel}</span>?</div>`
+    : `
+    <div class="question-text">Who had more <span class="hl">${q.statLabel}</span>? Pick all three, then submit.</div>
+    <div class="wager-reminder">Wagering <strong>${state.current.wager}</strong> point${state.current.wager === 1 ? "" : "s"}</div>
   `;
   card.appendChild(header);
 
-  const dotsRow = document.createElement("div");
-  dotsRow.className = "tot-dots";
-  dotsRow.innerHTML = [0, 1, 2]
-    .map((i) => {
-      let cls = "tot-dot";
-      if (i < results.length) cls += results[i] ? " tot-dot-correct" : " tot-dot-wrong";
-      else if (i === idx) cls += " tot-dot-active";
-      return `<span class="${cls}"></span>`;
-    })
-    .join("");
-  card.appendChild(dotsRow);
-
-  if (idx >= 3) {
-    // all 3 answered — finalize the round
-    const allCorrect = results.every(Boolean);
-    const delta = computePayout(state.current.wager, 0, allCorrect);
-    const doneBlock = document.createElement("div");
-    doneBlock.style.display = "flex";
-    doneBlock.style.flexDirection = "column";
-    doneBlock.style.alignItems = "center";
-    doneBlock.style.gap = "16px";
-    doneBlock.innerHTML = `
-      <div class="result-detail">${allCorrect ? "You went 3-for-3!" : "You didn't sweep all three match-ups."}</div>
-    `;
-    const finishBtn = document.createElement("button");
-    finishBtn.className = "btn btn-primary btn-lg";
-    finishBtn.textContent = "See Round Result";
-    finishBtn.addEventListener("click", () => {
-      state.totalScore += delta;
-      state.history.push({
-        topic: "thisOrThat",
-        wager: state.current.wager,
-        hints: 0,
-        correct: allCorrect,
-        delta,
-        statLabel: q.statLabel,
-        correctCount: results.filter(Boolean).length,
+  if (!revealed) {
+    const hintRow = document.createElement("div");
+    hintRow.className = "hint-row";
+    HINTS.thisOrThat.forEach((hint) => {
+      const btn = document.createElement("button");
+      const hintRevealed = state.current.hintsRevealed.includes(hint.key);
+      btn.className = "hint-btn" + (hintRevealed ? " revealed" : "");
+      btn.innerHTML = hintRevealed
+        ? `<span class="hint-label">${hint.label}</span><span class="hint-value">Shown below each name</span>`
+        : `<span class="hint-label">${hint.label}</span><span class="hint-value">Tap to reveal</span>`;
+      btn.addEventListener("click", () => {
+        if (!state.current.hintsRevealed.includes(hint.key)) {
+          state.current.hintsRevealed.push(hint.key);
+          resetTimer();
+          render();
+        }
       });
-      state.screen = "result";
-      render();
+      hintRow.appendChild(btn);
     });
-    doneBlock.appendChild(finishBtn);
-    card.appendChild(doneBlock);
-    return card;
+    card.appendChild(hintRow);
   }
 
-  const pair = q.pairs[idx];
-  const matchup = document.createElement("div");
-  matchup.className = "tot-matchup";
+  const list = document.createElement("div");
+  list.className = "tot-list";
 
-  const answered = idx < results.length;
+  const hintSuffix = { g: "G", mpg: "MPG" };
+  const playerHints = (player) =>
+    state.current.hintsRevealed
+      .map((key) => `<span class="tot-hint">${player[key === "g" ? "careerG" : "careerMpg"].toLocaleString()} ${hintSuffix[key]}</span>`)
+      .join("");
 
-  pair.forEach((player, side) => {
-    const btn = document.createElement("button");
-    btn.className = "tot-choice";
-    btn.innerHTML = `<span class="tot-name">${player.name}</span>`;
-    if (answered) {
-      btn.disabled = true;
-      const isWinner = player.value === Math.max(pair[0].value, pair[1].value);
-      if (isWinner) btn.classList.add("tot-choice-correct");
-      btn.querySelector(".tot-name").insertAdjacentHTML(
-        "afterend",
-        `<span class="tot-value">${player.value.toLocaleString()}</span>`
-      );
-    }
-    btn.addEventListener("click", () => {
-      if (answered) return;
-      const correct = player.value === Math.max(pair[0].value, pair[1].value);
-      state.current.totResults.push(correct);
-      render();
+  q.pairs.forEach((pair, i) => {
+    const row = document.createElement("div");
+    row.className = "tot-row";
+    row.innerHTML = `<div class="tot-row-label">Match-up ${i + 1}</div>`;
+
+    const matchup = document.createElement("div");
+    matchup.className = "tot-matchup";
+    const correctSide = pair[0].value > pair[1].value ? 0 : 1;
+
+    pair.forEach((player, side) => {
+      const btn = document.createElement("button");
+      btn.className = "tot-choice";
+      if (revealed) {
+        btn.disabled = true;
+        if (side === correctSide) btn.classList.add("tot-choice-correct");
+        else if (state.current.totSelections[i] === side) btn.classList.add("tot-choice-wrong");
+        btn.innerHTML = `<span class="tot-name">${player.name}</span>${playerHints(player)}<span class="tot-value">${player.value.toLocaleString()}</span>`;
+      } else {
+        if (state.current.totSelections[i] === side) btn.classList.add("tot-choice-selected");
+        btn.innerHTML = `<span class="tot-name">${player.name}</span>${playerHints(player)}`;
+        btn.addEventListener("click", () => {
+          state.current.totSelections[i] = side;
+          render();
+        });
+      }
+      matchup.appendChild(btn);
     });
-    matchup.appendChild(btn);
-  });
 
-  card.appendChild(matchup);
-
-  if (answered) {
-    const nextBtn = document.createElement("button");
-    nextBtn.className = "btn btn-primary btn-lg";
-    nextBtn.textContent = idx + 1 >= 3 ? "Continue" : "Next Match-Up";
-    nextBtn.addEventListener("click", () => {
-      state.current.totIndex += 1;
-      render();
-    });
-    card.appendChild(nextBtn);
-  } else {
     const vs = document.createElement("div");
     vs.className = "tot-vs";
     vs.textContent = "VS";
     matchup.appendChild(vs);
+
+    row.appendChild(matchup);
+    list.appendChild(row);
+  });
+
+  card.appendChild(list);
+
+  if (revealed) {
+    const correctCount = countThisOrThatCorrect(q, state.current.totSelections);
+    const summary = document.createElement("div");
+    summary.className = "result-detail";
+    summary.textContent = `You got ${correctCount} of 3 right.`;
+    card.appendChild(summary);
+
+    const finishBtn = document.createElement("button");
+    finishBtn.className = "btn btn-primary btn-lg";
+    finishBtn.textContent = "See Round Result";
+    finishBtn.addEventListener("click", () => {
+      const allCorrect = correctCount === 3;
+      const delta = computePayout(state.current.wager, hintCount, allCorrect);
+      state.totalScore += delta;
+      state.history.push({
+        topic,
+        wager: state.current.wager,
+        hints: hintCount,
+        correct: allCorrect,
+        delta,
+        statLabel: q.statLabel,
+        correctCount,
+      });
+      state.screen = "result";
+      render();
+    });
+    card.appendChild(finishBtn);
+    return card;
   }
+
+  const stakesNote = document.createElement("div");
+  stakesNote.className = "tagline";
+  stakesNote.style.marginBottom = "-6px";
+  stakesNote.textContent = "\"Correct\" = all 3 right. \"Wrong\" = anything else.";
+  card.appendChild(stakesNote);
+
+  const stakes = document.createElement("div");
+  stakes.innerHTML = renderStakesTable(state.current.wager, hintCount);
+  card.appendChild(stakes);
+
+  const allSelected = state.current.totSelections.every((s) => s !== null);
+  const submitBtn = document.createElement("button");
+  submitBtn.className = "btn btn-primary btn-lg";
+  submitBtn.textContent = "Submit All 3";
+  submitBtn.disabled = !allSelected;
+  submitBtn.addEventListener("click", () => {
+    stopTimer();
+    state.current.totSubmitted = true;
+    render();
+  });
+  card.appendChild(submitBtn);
 
   return card;
 }
@@ -672,6 +1103,8 @@ function screenResult() {
       : `You went ${last.correctCount}/3 on <strong>${last.statLabel}</strong>.`;
   } else if (last.correct) {
     detailHtml = `You guessed <strong>${last.guessed}</strong> — nailed it.`;
+  } else if (last.guessed === "(ran out of time)") {
+    detailHtml = `Time ran out. The correct answer was <strong>${last.answer}</strong>.`;
   } else {
     detailHtml = `You guessed <strong>${last.guessed}</strong>. The correct answer was <strong>${last.answer}</strong>.`;
   }
@@ -701,8 +1134,9 @@ function screenResult() {
       wager: null,
       hintsRevealed: [],
       selectedPlayer: null,
-      totIndex: 0,
-      totResults: [],
+      selectedCollege: null,
+      totSelections: [null, null, null],
+      totSubmitted: false,
     };
     if (state.round >= state.gameLength) {
       state.screen = "end";
@@ -753,16 +1187,24 @@ function screenEnd() {
 
 // ---------- Boot ----------
 async function loadData() {
-  const [d, pc, tot, p] = await Promise.all([
+  const [d, pc, tot, cq, cs, dq, p, fb] = await Promise.all([
     fetch("data/decade_questions.json").then((r) => r.json()),
     fetch("data/player_career_questions.json").then((r) => r.json()),
     fetch("data/this_or_that_pool.json").then((r) => r.json()),
+    fetch("data/college_questions.json").then((r) => r.json()),
+    fetch("data/colleges_search.json").then((r) => r.json()),
+    fetch("data/draft_questions.json").then((r) => r.json()),
     fetch("data/players_search.json").then((r) => r.json()),
+    fetch("data/fill_blank_boards.json").then((r) => r.json()),
   ]);
   decadeQuestions = d;
   playerCareerQuestions = pc;
   thisOrThatPool = tot;
+  collegeQuestions = cq;
+  collegesSearch = cs;
+  draftQuestions = dq;
   playersSearch = p;
+  fillBlankBoards = fb;
 }
 
 loadData().then(render);

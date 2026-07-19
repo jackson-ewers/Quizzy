@@ -8,6 +8,9 @@
   --accent: #ff6b35;
   --accent-2: #0071e3;
   --accent-3: #22a06b;
+  --accent-4: #a855f7;
+  --accent-5: #e0357a;
+  --accent-6: #f2b705;
   --good: #1fb15b;
   --bad: #e0303f;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 30px rgba(0, 0, 0, 0.08);
@@ -247,17 +250,14 @@ button {
 }
 .wheel-label {
   position: absolute;
-  width: 168px;
-  left: 50%;
-  top: 50%;
-  transform-origin: 0 0;
+  width: 90px;
+  transform: translate(-50%, -50%);
   font-weight: 700;
-  font-size: 16px;
-  line-height: 1.15;
+  font-size: 15px;
+  line-height: 1.2;
   color: #fff;
   text-shadow: 0 1px 3px rgba(0,0,0,0.35);
-  text-align: right;
-  padding-right: 20px;
+  text-align: center;
 }
 
 .spin-result {
@@ -410,15 +410,36 @@ button {
   font-weight: 700;
 }
 
-.payout-preview {
-  font-size: 14px;
-  color: var(--text-secondary);
+.stakes-table {
+  width: 100%;
   background: var(--surface-solid);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 10px 16px;
+  padding: 4px 16px;
+  font-size: 13px;
 }
-.payout-preview strong { color: var(--text); }
+.stakes-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.stakes-row:last-child { border-bottom: none; }
+.stakes-row-head {
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+.stakes-row-current {
+  font-weight: 700;
+}
+.stakes-row-current .stakes-hints { color: var(--text); }
+.stakes-hints { color: var(--text-secondary); }
+.stakes-win, .stakes-lose { font-weight: 600; }
 
 /* ---------- Search dropdown ---------- */
 .search-wrap {
@@ -466,8 +487,8 @@ button {
   justify-content: space-between;
   padding: 14px 18px;
   border-radius: 14px;
-  background: color-mix(in srgb, var(--good) 12%, transparent);
-  border: 1.5px solid var(--good);
+  background: color-mix(in srgb, var(--accent-2) 12%, transparent);
+  border: 1.5px solid var(--accent-2);
   font-weight: 700;
   font-size: 16px;
 }
@@ -586,25 +607,31 @@ button {
   background: color-mix(in srgb, var(--surface-solid) 100%, var(--text) 3%);
 }
 
-/* ---------- This or That ---------- */
-.tot-dots {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
+/* ---------- Fill in the Blank ---------- */
+.fill-blank-table td, .fill-blank-table th { text-align: left; }
+.fill-blank-table td:last-child, .fill-blank-table th:last-child { text-align: right; }
+.fb-blank-row td { font-weight: 700; }
+.fb-blank {
+  color: var(--accent-6);
+  letter-spacing: 0.05em;
 }
-.tot-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--border);
-}
-.tot-dot-active {
-  background: var(--accent-3);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-3) 20%, transparent);
-}
-.tot-dot-correct { background: var(--good); }
-.tot-dot-wrong { background: var(--bad); }
 
+/* ---------- This or That ---------- */
+.tot-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.tot-row-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  text-align: center;
+}
 .tot-matchup {
   position: relative;
   width: 100%;
@@ -617,7 +644,7 @@ button {
   background: var(--surface-solid);
   border: 2px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 28px 16px;
+  padding: 18px 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -625,24 +652,37 @@ button {
   transition: all 0.15s ease;
 }
 .tot-choice:hover:not(:disabled) {
-  border-color: var(--accent-3);
+  border-color: var(--accent-2);
   transform: translateY(-2px);
+}
+.tot-choice-selected {
+  border-color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent-2) 12%, var(--surface-solid));
 }
 .tot-choice:disabled { cursor: default; opacity: 1; }
 .tot-choice:disabled .tot-name { color: var(--text); }
 .tot-choice-correct {
   border-color: var(--good);
-  background: color-mix(in srgb, var(--good) 10%, var(--surface-solid));
+  background: color-mix(in srgb, var(--good) 12%, var(--surface-solid));
+}
+.tot-choice-wrong {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 10%, var(--surface-solid));
 }
 .tot-name {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
   text-align: center;
 }
 .tot-value {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-secondary);
+}
+.tot-hint {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-3);
 }
 .tot-vs {
   position: absolute;
@@ -652,19 +692,100 @@ button {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 50%;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--text-secondary);
+}
+
+/* ---------- Timer ---------- */
+.timer-display {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* ---------- How to Play ---------- */
+.app-header {
+  position: relative;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.how-to-play-btn {
+  align-self: center;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 999px;
+  order: -1;
+  margin-bottom: 4px;
+}
+.how-to-play-btn:hover {
+  color: var(--text);
+  border-color: var(--accent-2);
+}
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 100;
+}
+.modal-card {
+  width: 100%;
+  max-width: 520px;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.modal-body {
+  width: 100%;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.55;
+  text-align: left;
+}
+.modal-body p { margin: 0 0 12px; }
+.modal-body ul { margin: 0 0 12px; padding-left: 20px; }
+.modal-body li { margin-bottom: 8px; }
+
+/* ---------- Difficulty picker ---------- */
+.difficulty-card {
+  width: 150px;
+}
+.difficulty-label {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 2px;
 }
 
 @media (max-width: 480px) {
   .card { padding: 26px 20px; }
   .wager-grid { grid-template-columns: repeat(5, 1fr); gap: 8px; }
   .length-card { width: 140px; }
+  .difficulty-card { width: 96px; }
   .tot-matchup { flex-direction: column; }
 }
