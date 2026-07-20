@@ -859,16 +859,6 @@ button {
   text-align: left;
 }
 .modal-body p { margin: 0 0 12px; }
-.modal-intro {
-  font-weight: 600;
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: 12px;
-  padding: 12px 14px;
-}
-.modal-body ul { margin: 0 0 12px; padding-left: 20px; }
-.modal-body li { margin-bottom: 8px; }
 
 /* ---------- Difficulty picker ---------- */
 .difficulty-card {

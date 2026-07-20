@@ -407,21 +407,11 @@ function renderHowToPlayModal() {
       <button class="modal-close-btn" id="closeHowToPlayX" aria-label="Close">&times;</button>
       <h2 class="screen-title">How to Play</h2>
       <div class="modal-body">
-        <p class="modal-intro">Quizzy is about betting on yourself. Your wager is a stake on how confident you are — and every hint you reach for is a real trade-off, not free help.</p>
         <p><strong>1. Set up your game.</strong> Choose 5 or 10 questions, and a difficulty: Easy (2000-Present), Medium (1980-Present), or Hard (All-Time).</p>
         <p><strong>2. Spin the wheel.</strong> It lands on one of seven categories.</p>
         <p><strong>3. Wager on your confidence.</strong> Pick a number from 1 up to your game length — the more sure you are, the more you should bet. Each number can only be used once per game.</p>
         <p><strong>4. Beat the clock.</strong> You get 60 seconds to answer. Revealing a hint resets the clock back to 60. Run out of time and it's scored as a wrong answer.</p>
         <p><strong>5. Hints are a gamble, not a safety net.</strong> Tapping a hint can help you get there — but it shrinks your reward if you're right, and raises your penalty if you're still wrong. Going in on your own knowledge pays the most and costs the least; leaning on hints pays less and costs more. Check the stakes table on each question to see exactly what's on the line before you tap anything.</p>
-        <ul>
-          <li><strong>Decade Team Leader:</strong> guess who led a given team in a stat during a given decade. Hints: position, years active.</li>
-          <li><strong>Player Career:</strong> guess the mystery player from their season-by-season stat table. Hints: position and awards, shown per season.</li>
-          <li><strong>This or That:</strong> pick the player with more of a career stat, in 3 match-ups shown all at once. Get all three right to win, or the round is lost. Hints: career games played, career minutes per game (shown for all 6 players at once).</li>
-          <li><strong>College:</strong> guess which college a random All-Star played for. Hints: conference, mascot.</li>
-          <li><strong>Draft:</strong> guess the player from their draft year, round, pick, and team. Hints: position, college.</li>
-          <li><strong>Fill in the Blank:</strong> guess the missing player from a Top 5 stat leaderboard (a season, an all-time career, or an all-time playoff career). Hints: position, team(s).</li>
-          <li><strong>Awards Season:</strong> guess who won a given award (MVP, ROY, DPOY, Sixth Man, Most Improved, Finals MVP) in a given season. Hints: position, team.</li>
-        </ul>
         <p>Rack up points across every round and see how high you can score!</p>
       </div>
       <button class="btn btn-primary btn-lg" id="closeHowToPlay">Got It</button>
