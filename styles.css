@@ -816,6 +816,7 @@ button {
   z-index: 100;
 }
 .modal-card {
+  position: relative;
   width: 100%;
   max-width: 520px;
   max-height: 85vh;
@@ -830,6 +831,26 @@ button {
   align-items: center;
   gap: 18px;
 }
+.modal-close-btn {
+  position: sticky;
+  align-self: flex-end;
+  top: 0;
+  margin-bottom: -36px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  flex-shrink: 0;
+}
+.modal-close-btn:hover { color: var(--text); border-color: var(--accent-2); }
 .modal-body {
   width: 100%;
   color: var(--text);
@@ -838,6 +859,14 @@ button {
   text-align: left;
 }
 .modal-body p { margin: 0 0 12px; }
+.modal-intro {
+  font-weight: 600;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
 .modal-body ul { margin: 0 0 12px; padding-left: 20px; }
 .modal-body li { margin-bottom: 8px; }
 
