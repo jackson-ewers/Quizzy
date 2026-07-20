@@ -9,6 +9,7 @@ Outputs (into ./data/):
   - college_questions.json    "College" question pool (guess the player's alma mater)
   - colleges_search.json      distinct colleges for the guess-search dropdown
   - draft_questions.json      "Draft" question pool (guess the player from their draft slot)
+  - awards_season_questions.json "Awards Season" question pool (guess who won a given award in a given season)
   - fill_blank_boards.json    "Fill in the Blank" top-5 stat leaderboards
 """
 import csv
@@ -570,6 +571,61 @@ def main():
     with open(OUT / "draft_questions.json", "w", encoding="utf-8") as f:
         json.dump(draft_questions, f, ensure_ascii=False)
     print(f"draft_questions.json: {len(draft_questions)} players")
+
+    # ---- awards_season_questions.json ----
+    # Guess who won a specific award in a specific season. Difficulty filters on the
+    # award's own season year - it doesn't matter when the winning player's career
+    # was, only when they won this specific award (e.g. Easy can ask about a 1990s
+    # player's 2015-16 Sixth Man of the Year award).
+    AWARDS_SEASON_TYPES = [
+        ("MVP", "MVP"),
+        ("ROY", "Rookie of the Year"),
+        ("DPOY", "Defensive Player of the Year"),
+        ("Sixth Man of the Year", "Sixth Man of the Year"),
+        ("Most Improved Player", "Most Improved Player"),
+        ("Finals MVP", "Finals MVP"),
+    ]
+    award_type_keys = [k for k, _ in AWARDS_SEASON_TYPES]
+    award_placeholders = ",".join("?" for _ in award_type_keys)
+    award_rows = con.execute(
+        f"SELECT player_id, award_type, season, all_teams FROM player_accolades "
+        f"WHERE award_type IN ({award_placeholders})",
+        award_type_keys,
+    ).fetchall()
+
+    awards_season_questions = []
+    qid = 0
+    for r in award_rows:
+        pid = r["player_id"]
+        p = players.get(pid)
+        if not p:
+            continue
+        season = r["season"]
+        s = season_totals.get((pid, season))
+        pos = "-".join(s["positions"]) if s and s["positions"] else p["pos"]
+        if not pos:
+            continue
+        team_codes = [t.strip() for t in (r["all_teams"] or "").split(",") if t.strip()]
+        team_codes = [t for t in team_codes if t in team_names]
+        if not team_codes:
+            continue
+        award_label = next(lbl for k, lbl in AWARDS_SEASON_TYPES if k == r["award_type"])
+        qid += 1
+        awards_season_questions.append(
+            {
+                "id": qid,
+                "playerId": pid,
+                "name": p["name"],
+                "awardLabel": award_label,
+                "season": season,
+                "seasonYear": int(season.split("-")[0]),
+                "pos": pos,
+                "team": ", ".join(team_names[t] for t in team_codes),
+            }
+        )
+    with open(OUT / "awards_season_questions.json", "w", encoding="utf-8") as f:
+        json.dump(awards_season_questions, f, ensure_ascii=False)
+    print(f"awards_season_questions.json: {len(awards_season_questions)} questions")
 
     # ---- fill_blank_boards.json ----
     # Top-5 stat leaderboards. Scopes: a specific regular season, all-time

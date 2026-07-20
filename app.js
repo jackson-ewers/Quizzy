@@ -7,8 +7,9 @@ let collegesSearch = [];
 let draftQuestions = [];
 let playersSearch = [];
 let fillBlankBoards = [];
+let awardsSeasonQuestions = [];
 
-const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank"];
+const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank", "awardsSeason"];
 
 const TOPIC_META = {
   decade: {
@@ -44,6 +45,11 @@ const TOPIC_META = {
     description:
       "You'll see a Top 5 stat leaderboard — for a season, a career, or the playoffs — with one player blanked out. Guess who's missing.",
   },
+  awardsSeason: {
+    title: "Awards Season",
+    color: "var(--accent-7)",
+    description: "You'll get an award and a season — guess who won it.",
+  },
 };
 
 const HINTS = {
@@ -70,6 +76,10 @@ const HINTS = {
   fillBlank: [
     { key: "pos", label: "Position", value: (q) => q.pos },
     { key: "team", label: "Team(s)", value: (q) => q.team },
+  ],
+  awardsSeason: [
+    { key: "pos", label: "Position", value: (q) => q.pos },
+    { key: "team", label: "Team", value: (q) => q.team },
   ],
 };
 
@@ -98,6 +108,7 @@ function freshState() {
       college: new Set(),
       draft: new Set(),
       fillBlank: new Set(),
+      awardsSeason: new Set(),
     },
     wheelRotation: 0,
     showHowToPlay: false,
@@ -246,9 +257,14 @@ function pickQuestion(topic) {
     playerCareer: playerCareerQuestions,
     college: collegeQuestions,
     draft: draftQuestions,
+    awardsSeason: awardsSeasonQuestions,
   };
   const fullPool = poolByTopic[topic];
-  const pool = fullPool.filter((q) => (topic === "decade" ? q.decade >= cutoff : q.fromYear >= cutoff));
+  const pool = fullPool.filter((q) => {
+    if (topic === "decade") return q.decade >= cutoff;
+    if (topic === "awardsSeason") return q.seasonYear >= cutoff;
+    return q.fromYear >= cutoff;
+  });
 
   const used = state.usedQuestionIds[topic];
   let candidates = pool.filter((q) => !used.has(q.id));
@@ -320,6 +336,9 @@ function questionText(topic, q) {
   if (topic === "fillBlank") {
     return `Here's the <span class="hl">${q.scopeLabel}</span> Top 5 in <span class="hl">${q.statLabel}</span> — one name is missing. Who is it?`;
   }
+  if (topic === "awardsSeason") {
+    return `Who won <span class="hl">${q.awardLabel}</span> in the <span class="hl">${q.season}</span> season?`;
+  }
   return `Here's a mystery player's season-by-season stat line. Who is it?`;
 }
 
@@ -388,7 +407,7 @@ function renderHowToPlayModal() {
       <h2 class="screen-title">How to Play</h2>
       <div class="modal-body">
         <p><strong>1. Set up your game.</strong> Choose 5 or 10 questions, and a difficulty: Easy (2000-Present), Medium (1980-Present), or Hard (All-Time).</p>
-        <p><strong>2. Spin the wheel.</strong> It lands on one of six categories.</p>
+        <p><strong>2. Spin the wheel.</strong> It lands on one of seven categories.</p>
         <p><strong>3. Wager points.</strong> Pick a number from 1 up to your game length — each number can only be used once per game.</p>
         <p><strong>4. Beat the clock.</strong> You get 60 seconds to answer. Revealing a hint resets the clock back to 60. Run out of time and it's scored as a wrong answer.</p>
         <p><strong>5. Hints cost you.</strong> Fewer hints used means a bigger reward for a correct answer, and a smaller penalty for a wrong one.</p>
@@ -399,6 +418,7 @@ function renderHowToPlayModal() {
           <li><strong>College:</strong> guess which college a random All-Star played for. Hints: conference, mascot.</li>
           <li><strong>Draft:</strong> guess the player from their draft year, round, pick, and team. Hints: position, college.</li>
           <li><strong>Fill in the Blank:</strong> guess the missing player from a Top 5 stat leaderboard (a season, an all-time career, or an all-time playoff career). Hints: position, team(s).</li>
+          <li><strong>Awards Season:</strong> guess who won a given award (MVP, ROY, DPOY, Sixth Man, Most Improved, Finals MVP) in a given season. Hints: position, team.</li>
         </ul>
         <p>Rack up points across every round and see how high you can score!</p>
       </div>
@@ -522,6 +542,7 @@ function screenWheel() {
     college: "#a855f7",
     draft: "#e0357a",
     fillBlank: "#f2b705",
+    awardsSeason: "#0891b2",
   };
   const gradientStops = segTopics
     .map((t, i) => `${segColorHex[t]} ${i * segAngle}deg ${(i + 1) * segAngle}deg`)
@@ -1191,7 +1212,7 @@ function screenEnd() {
 
 // ---------- Boot ----------
 async function loadData() {
-  const [d, pc, tot, cq, cs, dq, p, fb] = await Promise.all([
+  const [d, pc, tot, cq, cs, dq, p, fb, as] = await Promise.all([
     fetch("data/decade_questions.json").then((r) => r.json()),
     fetch("data/player_career_questions.json").then((r) => r.json()),
     fetch("data/this_or_that_pool.json").then((r) => r.json()),
@@ -1200,6 +1221,7 @@ async function loadData() {
     fetch("data/draft_questions.json").then((r) => r.json()),
     fetch("data/players_search.json").then((r) => r.json()),
     fetch("data/fill_blank_boards.json").then((r) => r.json()),
+    fetch("data/awards_season_questions.json").then((r) => r.json()),
   ]);
   decadeQuestions = d;
   playerCareerQuestions = pc;
@@ -1209,6 +1231,7 @@ async function loadData() {
   draftQuestions = dq;
   playersSearch = p;
   fillBlankBoards = fb;
+  awardsSeasonQuestions = as;
 }
 
 loadData().then(render);
