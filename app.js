@@ -112,6 +112,7 @@ function freshState() {
     },
     wheelRotation: 0,
     showHowToPlay: false,
+    showWelcome: false,
     current: {
       topic: null,
       question: null,
@@ -125,6 +126,7 @@ function freshState() {
   };
 }
 let state = freshState();
+state.showWelcome = true; // only ever true on the very first page load, not on later resets
 
 // ---------- Timer ----------
 let timerInterval = null;
@@ -378,6 +380,32 @@ function render() {
   if (state.showHowToPlay) {
     app.appendChild(renderHowToPlayModal());
   }
+  if (state.showWelcome) {
+    app.appendChild(renderWelcomeModal());
+  }
+}
+
+function renderWelcomeModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <button class="modal-close-btn" id="closeWelcomeX" aria-label="Close">&times;</button>
+      <h2 class="screen-title">Welcome to Quizzy!</h2>
+      <div class="modal-body" style="text-align:center;">
+        <p>Spin the wheel across 7 NBA trivia categories, wager points on how confident you are, and race a 60-second clock to answer. Hints can help — but they'll cost you, so it's really a bet on yourself. See how high you can score!</p>
+      </div>
+    </div>
+  `;
+  const close = () => {
+    state.showWelcome = false;
+    render();
+  };
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.querySelector("#closeWelcomeX").addEventListener("click", close);
+  return overlay;
 }
 
 function renderHeader() {
