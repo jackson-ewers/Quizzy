@@ -301,6 +301,36 @@ button {
   text-align: center;
 }
 
+/* ---------- Score badge ---------- */
+.score-badge {
+  position: sticky;
+  top: 10px;
+  z-index: 5;
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 24px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), #ff8c5a);
+  box-shadow: var(--shadow-lg);
+}
+.score-badge-label {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.85);
+}
+.score-badge-value {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Status bar ---------- */
 .status-bar {
   width: 100%;
@@ -469,7 +499,13 @@ button {
   font-weight: 700;
 }
 .stakes-row-current {
-  font-weight: 700;
+  font-weight: 800;
+  background: color-mix(in srgb, var(--accent-2) 18%, transparent);
+  border-radius: 8px;
+  border-bottom: none;
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
 }
 .stakes-row-current .stakes-hints { color: var(--text); }
 .stakes-hints { color: var(--text-secondary); }
@@ -830,6 +866,10 @@ button {
   .card { padding: 18px 16px; gap: 12px; }
   h2.screen-title { font-size: 21px; }
 
+  .score-badge { padding: 9px 18px; top: 6px; }
+  .score-badge-value { font-size: 24px; }
+  .score-badge-label { font-size: 11px; }
+
   .status-pill { padding: 6px 12px; font-size: 12px; }
   .status-pill strong { font-size: 13px; }
 
@@ -866,6 +906,9 @@ button {
   .tot-list { gap: 8px; }
 
   .career-table-wrap, .fill-blank-table { max-height: 220px; }
+
+  .wheel-label { width: 66px; font-size: 11px; line-height: 1.15; }
+  .wheel-hub { width: 54px; height: 54px; }
 
   .timer-display { font-size: 22px; }
   .wheel-stage { width: min(300px, 78vw); height: min(300px, 78vw); }

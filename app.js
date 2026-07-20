@@ -441,11 +441,20 @@ function renderHowToPlayModal() {
 function statusBar() {
   const div = document.createElement("div");
   div.className = "status-bar";
-  const scoreClass = state.totalScore > 0 ? "score-positive" : state.totalScore < 0 ? "score-negative" : "";
   div.innerHTML = `
     <div class="status-pill">Round <strong>${state.round + 1}</strong> / ${state.gameLength}</div>
-    <div class="status-pill">Score <strong class="${scoreClass}">${state.totalScore > 0 ? "+" : ""}${state.totalScore}</strong></div>
     <div class="status-pill">Left: <strong>${availableWagers().join(", ") || "—"}</strong></div>
+  `;
+  return div;
+}
+
+function scoreBadge() {
+  const div = document.createElement("div");
+  div.className = "score-badge";
+  const scoreClass = state.totalScore > 0 ? "score-positive" : state.totalScore < 0 ? "score-negative" : "";
+  div.innerHTML = `
+    <span class="score-badge-label">Score</span>
+    <span class="score-badge-value ${scoreClass}">${state.totalScore > 0 ? "+" : ""}${state.totalScore}</span>
   `;
   return div;
 }
@@ -557,7 +566,7 @@ function screenWheel() {
           .map((t, i) => {
             const angle = i * segAngle + segAngle / 2;
             const rad = (angle * Math.PI) / 180;
-            const radius = 108;
+            const radius = window.matchMedia("(max-width: 480px)").matches ? 76 : 108;
             const dx = radius * Math.sin(rad);
             const dy = -radius * Math.cos(rad);
             return `<div class="wheel-label" style="left: calc(50% + ${dx}px); top: calc(50% + ${dy}px);">${TOPIC_META[t].title}</div>`;
@@ -612,6 +621,7 @@ function screenWheel() {
 function screenWager() {
   const card = document.createElement("div");
   card.className = "card";
+  card.appendChild(scoreBadge());
   card.appendChild(progressBar());
   card.appendChild(statusBar());
 
@@ -668,6 +678,7 @@ function screenQuestion() {
 
   const card = document.createElement("div");
   card.className = "card";
+  card.appendChild(scoreBadge());
   card.appendChild(progressBar());
   card.appendChild(statusBar());
 
@@ -941,6 +952,7 @@ function renderCollegeSearch() {
 function screenThisOrThat() {
   const card = document.createElement("div");
   card.className = "card";
+  card.appendChild(scoreBadge());
   card.appendChild(progressBar());
   card.appendChild(statusBar());
 
@@ -1114,6 +1126,7 @@ function screenThisOrThat() {
 function screenResult() {
   const card = document.createElement("div");
   card.className = "card";
+  card.appendChild(scoreBadge());
   card.appendChild(progressBar());
   card.appendChild(statusBar());
 
