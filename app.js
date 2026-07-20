@@ -791,7 +791,7 @@ function renderPlayerCareerTable(q, hintsRevealed) {
 
   const headCells = ["Season"];
   if (showPos) headCells.push("Pos");
-  headCells.push("Team", "G", "GS", "PTS", "REB", "AST", "BLK", "STL");
+  headCells.push("Team", "G", "GS", "MPG", "PTS", "REB", "AST");
   if (showAwards) headCells.push("Awards");
 
   const fmt1 = (v) => (typeof v === "number" ? v.toFixed(1) : v);
@@ -800,7 +800,7 @@ function renderPlayerCareerTable(q, hintsRevealed) {
     .map((s) => {
       const cells = [s.season];
       if (showPos) cells.push(s.pos || "—");
-      cells.push(s.team || "—", s.g, s.gs, fmt1(s.pts), fmt1(s.trb), fmt1(s.ast), fmt1(s.blk), fmt1(s.stl));
+      cells.push(s.team || "—", s.g, s.gs, fmt1(s.mpg), fmt1(s.pts), fmt1(s.trb), fmt1(s.ast));
       if (showAwards) cells.push(s.awards || "—");
       return `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
     })

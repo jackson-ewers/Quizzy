@@ -227,12 +227,12 @@ def main():
     # and fill_blank_boards
     season_totals = defaultdict(
         lambda: {
-            "g": 0, "gs": 0, "pts": 0, "trb": 0, "ast": 0, "blk": 0, "stl": 0, "tp": 0,
+            "g": 0, "gs": 0, "mp": 0, "pts": 0, "trb": 0, "ast": 0, "tp": 0,
             "teams": [], "positions": [],
-            # some stats weren't tracked league-wide in every season (e.g. steals/blocks
-            # before 1973-74, games-started before 1970-71, rebounds before 1950-51) - track
+            # some stats weren't tracked league-wide in every season (e.g. games-started
+            # before 1970-71, rebounds before 1950-51, minutes before 1951-52) - track
             # whether we actually saw a real (non-null) value so those cells can show "-"
-            "gsTracked": False, "trbTracked": False, "blkTracked": False, "stlTracked": False,
+            "gsTracked": False, "trbTracked": False, "mpTracked": False,
         }
     )
 
@@ -259,20 +259,17 @@ def main():
         s = season_totals[(pid, season)]
         s["g"] += r["g"] or 0
         s["gs"] += r["gs"] or 0
+        s["mp"] += r["mp"] or 0
         s["pts"] += r["pts"] or 0
         s["trb"] += r["trb"] or 0
         s["ast"] += r["ast"] or 0
-        s["blk"] += r["blk"] or 0
-        s["stl"] += r["stl"] or 0
         s["tp"] += r["tp"] or 0
         if r["gs"] is not None:
             s["gsTracked"] = True
         if r["trb"] is not None:
             s["trbTracked"] = True
-        if r["blk"] is not None:
-            s["blkTracked"] = True
-        if r["stl"] is not None:
-            s["stlTracked"] = True
+        if r["mp"] is not None:
+            s["mpTracked"] = True
         if team not in s["teams"]:
             s["teams"].append(team)
         pos = (r["pos"] or "").strip()
@@ -354,11 +351,10 @@ def main():
                         "season": season,
                         "g": round(s["g"]),
                         "gs": round(s["gs"]) if s["gsTracked"] else "-",
+                        "mpg": per_game(s["mp"], s["g"]) if s["mpTracked"] else "-",
                         "pts": per_game(s["pts"], s["g"]),
                         "trb": per_game(s["trb"], s["g"]) if s["trbTracked"] else "-",
                         "ast": per_game(s["ast"], s["g"]),
-                        "blk": per_game(s["blk"], s["g"]) if s["blkTracked"] else "-",
-                        "stl": per_game(s["stl"], s["g"]) if s["stlTracked"] else "-",
                         "pos": "-".join(s["positions"]),
                         "team": ", ".join(s["teams"]),
                         "awards": awards_by_season.get((pid, season), ""),
