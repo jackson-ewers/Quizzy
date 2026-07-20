@@ -10,6 +10,7 @@ Outputs (into ./data/):
   - colleges_search.json      distinct colleges for the guess-search dropdown
   - draft_questions.json      "Draft" question pool (guess the player from their draft slot)
   - awards_season_questions.json "Awards Season" question pool (guess who won a given award in a given season)
+  - trophy_case_questions.json "Trophy Case" question pool (guess the player from their career accolade resume)
   - fill_blank_boards.json    "Fill in the Blank" top-5 stat leaderboards
 """
 import csv
@@ -622,6 +623,82 @@ def main():
     with open(OUT / "awards_season_questions.json", "w", encoding="utf-8") as f:
         json.dump(awards_season_questions, f, ensure_ascii=False)
     print(f"awards_season_questions.json: {len(awards_season_questions)} questions")
+
+    # ---- trophy_case_questions.json ----
+    # Guess the player from their full career accolade resume (counts of each
+    # award type, e.g. "2x All-Star, 2x All-NBA, 1x Championship"). Only the
+    # award types below count toward a resume, and only players with 3+
+    # distinct award types qualify - except All-Rookie, which doesn't count
+    # toward that 3-type minimum (it can still show up in the resume itself,
+    # a player just needs 3 other distinct types beyond it). If more than one
+    # player ends up with the exact same resume (same types, same counts
+    # each), that resume is ambiguous and is dropped entirely - every
+    # question here has exactly one possible answer.
+    TROPHY_CASE_AWARD_TYPES = {
+        "All-BAA", "All-Defensive", "All-NBA", "All-Rookie", "All-Star",
+        "All-Star Game MVP", "Assist Champ", "Block Champ", "Championship",
+        "Clutch Player of the Year", "DPOY", "Finals MVP", "Most Improved Player",
+        "MVP", "NBA 75th Anniversary Team", "Rebound Champ", "ROY",
+        "Scoring Champ", "Sixth Man of the Year", "Steal Champ",
+    }
+    MIN_TROPHY_CASE_TYPES = 3
+
+    trophy_award_counts = defaultdict(lambda: defaultdict(int))
+    for r in con.execute("SELECT player_id, award_type FROM player_accolades"):
+        if r["award_type"] in TROPHY_CASE_AWARD_TYPES:
+            trophy_award_counts[r["player_id"]][r["award_type"]] += 1
+
+    # distinct teams across a player's whole regular-season career, chronologically
+    trophy_career_teams = defaultdict(list)
+    for r in con.execute('SELECT player_id, team, season FROM players_reg_szn_totals ORDER BY season'):
+        team = (r["team"] or "").strip()
+        if team in MULTI_TEAM_CODES or team not in team_names:
+            continue
+        lst = trophy_career_teams[r["player_id"]]
+        if team not in lst:
+            lst.append(team)
+
+    signature_groups = defaultdict(list)  # signature tuple -> [player_id, ...]
+    for pid, counts in trophy_award_counts.items():
+        # All-Rookie doesn't count toward the 3-type minimum - it can still show up
+        # in the resume, but a player needs 3 other distinct types beyond it
+        qualifying_types = [t for t in counts if t != "All-Rookie"]
+        if len(qualifying_types) < MIN_TROPHY_CASE_TYPES:
+            continue
+        p = players.get(pid)
+        if not p or p["from"] is None or p["to"] is None:
+            continue
+        if not trophy_career_teams.get(pid):
+            continue
+        signature = tuple(sorted(counts.items()))
+        signature_groups[signature].append(pid)
+
+    trophy_case_questions = []
+    qid = 0
+    dropped_ambiguous = 0
+    for signature, pids in signature_groups.items():
+        if len(pids) != 1:
+            dropped_ambiguous += 1
+            continue
+        pid = pids[0]
+        p = players[pid]
+        accolades = sorted(signature, key=lambda kv: (-kv[1], kv[0]))
+        qid += 1
+        trophy_case_questions.append(
+            {
+                "id": qid,
+                "playerId": pid,
+                "name": p["name"],
+                "accolades": [{"type": t, "count": c} for t, c in accolades],
+                "fromYear": p["from"],
+                "toYear": p["to"],
+                "years": f"{p['from']}–{p['to']}",
+                "team": ", ".join(team_names[t] for t in trophy_career_teams[pid]),
+            }
+        )
+    with open(OUT / "trophy_case_questions.json", "w", encoding="utf-8") as f:
+        json.dump(trophy_case_questions, f, ensure_ascii=False)
+    print(f"trophy_case_questions.json: {len(trophy_case_questions)} questions ({dropped_ambiguous} ambiguous resumes dropped)")
 
     # ---- fill_blank_boards.json ----
     # Top-5 stat leaderboards. Scopes: a specific regular season, all-time

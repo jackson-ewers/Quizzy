@@ -8,8 +8,9 @@ let draftQuestions = [];
 let playersSearch = [];
 let fillBlankBoards = [];
 let awardsSeasonQuestions = [];
+let trophyCaseQuestions = [];
 
-const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank", "awardsSeason"];
+const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank", "awardsSeason", "trophyCase"];
 
 const TOPIC_META = {
   decade: {
@@ -50,6 +51,11 @@ const TOPIC_META = {
     color: "var(--accent-7)",
     description: "You'll get an award and a season — guess who won it.",
   },
+  trophyCase: {
+    title: "Trophy Case",
+    color: "var(--accent-8)",
+    description: "You'll see a mystery player's full career accolade resume — guess who it is.",
+  },
 };
 
 const HINTS = {
@@ -81,6 +87,10 @@ const HINTS = {
     { key: "pos", label: "Position", value: (q) => q.pos },
     { key: "team", label: "Team", value: (q) => q.team },
   ],
+  trophyCase: [
+    { key: "years", label: "Years Active", value: (q) => q.years },
+    { key: "team", label: "Teams", value: (q) => q.team },
+  ],
 };
 
 const DIFFICULTY_LEVELS = {
@@ -109,6 +119,7 @@ function freshState() {
       draft: new Set(),
       fillBlank: new Set(),
       awardsSeason: new Set(),
+      trophyCase: new Set(),
     },
     wheelRotation: 0,
     showHowToPlay: false,
@@ -260,6 +271,7 @@ function pickQuestion(topic) {
     college: collegeQuestions,
     draft: draftQuestions,
     awardsSeason: awardsSeasonQuestions,
+    trophyCase: trophyCaseQuestions,
   };
   const fullPool = poolByTopic[topic];
   const pool = fullPool.filter((q) => {
@@ -341,6 +353,10 @@ function questionText(topic, q) {
   if (topic === "awardsSeason") {
     return `Who won <span class="hl">${q.awardLabel}</span> in the <span class="hl">${q.season}</span> season?`;
   }
+  if (topic === "trophyCase") {
+    const list = q.accolades.map((a) => `${a.count}x ${a.type}`).join(", ");
+    return `Here's a mystery player's career accolades: <span class="hl">${list}</span>. Who is it?`;
+  }
   return `Here's a mystery player's season-by-season stat line. Who is it?`;
 }
 
@@ -393,7 +409,7 @@ function renderWelcomeModal() {
       <button class="modal-close-btn" id="closeWelcomeX" aria-label="Close">&times;</button>
       <h2 class="screen-title">Welcome to Quizzy!</h2>
       <div class="modal-body" style="text-align:center;">
-        <p>Spin the wheel across 7 NBA trivia categories, wager points on how confident you are, and race a 60-second clock to answer. Hints can help — but they'll cost you, so it's really a bet on yourself. See how high you can score!</p>
+        <p>Spin the wheel across different NBA trivia categories, wager points on how confident you are, and race a 1 minute clock to answer. Hints can help — but they'll cost you, so it's really a bet on yourself. See how high you can score!</p>
       </div>
     </div>
   `;
@@ -576,6 +592,7 @@ function screenWheel() {
     draft: "#e0357a",
     fillBlank: "#f2b705",
     awardsSeason: "#0891b2",
+    trophyCase: "#92400e",
   };
   const gradientStops = segTopics
     .map((t, i) => `${segColorHex[t]} ${i * segAngle}deg ${(i + 1) * segAngle}deg`)
@@ -1249,7 +1266,7 @@ function screenEnd() {
 
 // ---------- Boot ----------
 async function loadData() {
-  const [d, pc, tot, cq, cs, dq, p, fb, as] = await Promise.all([
+  const [d, pc, tot, cq, cs, dq, p, fb, as, tc] = await Promise.all([
     fetch("data/decade_questions.json").then((r) => r.json()),
     fetch("data/player_career_questions.json").then((r) => r.json()),
     fetch("data/this_or_that_pool.json").then((r) => r.json()),
@@ -1259,6 +1276,7 @@ async function loadData() {
     fetch("data/players_search.json").then((r) => r.json()),
     fetch("data/fill_blank_boards.json").then((r) => r.json()),
     fetch("data/awards_season_questions.json").then((r) => r.json()),
+    fetch("data/trophy_case_questions.json").then((r) => r.json()),
   ]);
   decadeQuestions = d;
   playerCareerQuestions = pc;
@@ -1269,6 +1287,7 @@ async function loadData() {
   playersSearch = p;
   fillBlankBoards = fb;
   awardsSeasonQuestions = as;
+  trophyCaseQuestions = tc;
 }
 
 loadData().then(render);
