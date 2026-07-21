@@ -520,6 +520,8 @@ def main():
     # NBA/BAA drafts only, with a valid round/pick and a known career position.
     # Players drafted more than once in NBA history (didn't sign the first
     # time, got re-drafted) are excluded entirely rather than picked from.
+    # Also requires the player to have played at least 1 game for the team that
+    # drafted them during their rookie season.
     MIN_DRAFT_MPG = 25
 
     draft_rows = con.execute(
@@ -530,6 +532,17 @@ def main():
     draft_by_player = defaultdict(list)
     for r in draft_rows:
         draft_by_player[r["player_id"]].append(r)
+
+    # per (player, season) -> team -> games, so we can confirm a drafted player
+    # actually suited up for the team that drafted them during their rookie season
+    # (excludes players who never played a game for their drafting team - e.g.
+    # traded away before playing, or who signed elsewhere first)
+    team_games_by_player_season = defaultdict(lambda: defaultdict(float))
+    for r in rows:
+        team = (r["team"] or "").strip()
+        if team in MULTI_TEAM_CODES or team not in team_names:
+            continue
+        team_games_by_player_season[(r["player_id"], r["season"])][team] += r["g"] or 0
 
     draft_questions = []
     qid = 0
@@ -547,6 +560,9 @@ def main():
         team_abbr = (r["team"] or "").strip()
         if team_abbr not in team_names:
             continue
+        rookie_season = f"{p['from']}-{(p['from'] + 1) % 100:02d}"
+        if team_games_by_player_season.get((pid, rookie_season), {}).get(team_abbr, 0) < 1:
+            continue  # never actually played a game for the team that drafted them as a rookie
         college = (r["college"] or "").strip()
         qid += 1
         draft_questions.append(
@@ -701,10 +717,10 @@ def main():
     print(f"trophy_case_questions.json: {len(trophy_case_questions)} questions ({dropped_ambiguous} ambiguous resumes dropped)")
 
     # ---- fill_blank_boards.json ----
-    # Top-5 stat leaderboards. Scopes: a specific regular season, all-time
-    # regular season career, all-time playoff career. Measures: total or per-game.
-    # The client picks a board at runtime, blanks out one random player, and the
-    # user has to guess who's missing.
+    # Top-5 stat leaderboards (a specific regular season, all-time regular season
+    # career, all-time playoff career; total or per-game), plus All-NBA/All-Defensive
+    # team rosters for a specific season/tier. The client picks a board at runtime,
+    # blanks out one random player, and the user has to guess who's missing.
     FILL_BLANK_STATS = [
         ("pts", "Points", 0),
         ("trb", "Rebounds", 0),
@@ -873,6 +889,59 @@ def main():
                         "players": top5,
                     }
                 )
+
+    # -- All-NBA / All-Defensive team roster boards --
+    # e.g. "2015 2nd Team All-NBA" - no stat value, just the 5-player roster for
+    # that team/season, with the same position/team-that-season hints as any
+    # other season-scope board.
+    TEAM_ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
+    team_award_rows = con.execute(
+        "SELECT player_id, award_type, season, team_number FROM player_accolades "
+        "WHERE award_type IN ('All-NBA', 'All-Defensive') AND team_number IS NOT NULL"
+    ).fetchall()
+    team_rosters = defaultdict(list)  # (award_type, season, team_number) -> [player_id, ...]
+    for r in team_award_rows:
+        key = (r["award_type"], r["season"], int(r["team_number"]))
+        team_rosters[key].append(r["player_id"])
+
+    for (award_type, season, team_number), pids in team_rosters.items():
+        if len(pids) != 5:
+            continue  # historical ties for the last spot don't fit a 5-player board
+        start_year = int(season.split("-")[0])
+        entries = []
+        for pid in pids:
+            p = players.get(pid)
+            s = season_totals.get((pid, season))
+            if not p or not s or not s["teams"]:
+                continue
+            pos = "-".join(s["positions"]) or p["pos"]
+            if not pos:
+                continue
+            entries.append(
+                {
+                    "playerId": pid,
+                    "name": p["name"],
+                    "pos": pos,
+                    "team": ", ".join(team_names[t] for t in s["teams"]),
+                }
+            )
+        if len(entries) != 5:
+            continue
+        bid += 1
+        ordinal = TEAM_ORDINAL.get(team_number, f"{team_number}th")
+        fill_blank_boards.append(
+            {
+                "id": bid,
+                "statKey": award_type,
+                "statLabel": f"{start_year} {ordinal} Team {award_type}",
+                "measure": "roster",
+                "scope": "season",
+                "scopeLabel": f"{season} Season",
+                "season": season,
+                "seasonYear": start_year,
+                "players": entries,
+            }
+        )
 
     with open(OUT / "fill_blank_boards.json", "w", encoding="utf-8") as f:
         json.dump(fill_blank_boards, f, ensure_ascii=False)

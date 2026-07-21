@@ -348,6 +348,9 @@ function questionText(topic, q) {
     return `In the <span class="hl">${q.draftYear}</span> draft, round <span class="hl">${q.round}</span>, pick <span class="hl">${q.pick}</span>, the <span class="hl">${q.teamName}</span> selected... who?`;
   }
   if (topic === "fillBlank") {
+    if (q.measure === "roster") {
+      return `Here's the <span class="hl">${q.statLabel}</span> — one name is missing. Who is it?`;
+    }
     return `Here's the <span class="hl">${q.scopeLabel}</span> Top 5 in <span class="hl">${q.statLabel}</span> — one name is missing. Who is it?`;
   }
   if (topic === "awardsSeason") {
@@ -409,7 +412,7 @@ function renderWelcomeModal() {
       <button class="modal-close-btn" id="closeWelcomeX" aria-label="Close">&times;</button>
       <h2 class="screen-title">Welcome to Quizzy!</h2>
       <div class="modal-body" style="text-align:center;">
-        <p>Spin the wheel across different NBA trivia categories, wager points on how confident you are, and race a 1 minute clock to answer. Hints can help — but they'll cost you, so it's really a bet on yourself. See how high you can score!</p>
+        <p>Spin the wheel across different NBA trivia topics, wager points on how confident you are, and race a 1 minute clock to answer. Hints can help — but they'll cost you, so it's really a bet on yourself. See how high you can score!</p>
       </div>
     </div>
   `;
@@ -452,7 +455,7 @@ function renderHowToPlayModal() {
       <h2 class="screen-title">How to Play</h2>
       <div class="modal-body">
         <p><strong>1. Set up your game.</strong> Choose 5 or 10 questions, and a difficulty: Easy (2000-Present), Medium (1980-Present), or Hard (All-Time).</p>
-        <p><strong>2. Spin the wheel.</strong> It lands on one of seven categories.</p>
+        <p><strong>2. Spin the wheel.</strong> It lands on one of ${TOPIC_ORDER.length} topics.</p>
         <p><strong>3. Wager on your confidence.</strong> Pick a number from 1 up to your game length — the more sure you are, the more you should bet. Each number can only be used once per game.</p>
         <p><strong>4. Beat the clock.</strong> You get 60 seconds to answer. Revealing a hint resets the clock back to 60. Run out of time and it's scored as a wrong answer.</p>
         <p><strong>5. Hints are a gamble, not a safety net.</strong> Tapping a hint can help you get there — but it shrinks your reward if you're right, and raises your penalty if you're still wrong. Going in on your own knowledge pays the most and costs the least; leaning on hints pays less and costs more. Check the stakes table on each question to see exactly what's on the line before you tap anything.</p>
@@ -863,19 +866,24 @@ function renderPlayerCareerTable(q, hintsRevealed) {
 function renderFillBlankBoard(q) {
   const wrap = document.createElement("div");
   wrap.className = "career-table-wrap fill-blank-wrap";
+  const isRoster = q.measure === "roster";
 
   const rows = q.players
     .map((p, i) => {
       const isBlank = i === q.blankIndex;
-      const valueStr = q.measure === "perGame" ? p.value.toFixed(1) : p.value.toLocaleString();
       const nameCell = isBlank ? `<span class="fb-blank">???</span>` : p.name;
-      return `<tr${isBlank ? ' class="fb-blank-row"' : ""}><td>${i + 1}</td><td>${nameCell}</td><td>${valueStr}</td></tr>`;
+      const valueCell = isRoster
+        ? ""
+        : `<td>${q.measure === "perGame" ? p.value.toFixed(1) : p.value.toLocaleString()}</td>`;
+      return `<tr${isBlank ? ' class="fb-blank-row"' : ""}><td>${i + 1}</td><td>${nameCell}</td>${valueCell}</tr>`;
     })
     .join("");
 
+  const headCells = isRoster ? `<th>#</th><th>Player</th>` : `<th>Rank</th><th>Player</th><th>${q.statLabel}</th>`;
+
   wrap.innerHTML = `
     <table class="career-table fill-blank-table">
-      <thead><tr><th>Rank</th><th>Player</th><th>${q.statLabel}</th></tr></thead>
+      <thead><tr>${headCells}</tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
