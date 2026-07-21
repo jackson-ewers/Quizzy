@@ -135,6 +135,8 @@ function freshState() {
     wheelRotation: 0,
     showHowToPlay: false,
     showWelcome: false,
+    showPrivacyPolicy: false,
+    showTermsOfUse: false,
     current: {
       topic: null,
       question: null,
@@ -423,12 +425,19 @@ function render() {
   wrap.className = "wrap";
   wrap.appendChild(renderHeader());
   wrap.appendChild(renderScreen());
+  wrap.appendChild(renderFooter());
   app.appendChild(wrap);
   if (state.showHowToPlay) {
     app.appendChild(renderHowToPlayModal());
   }
   if (state.showWelcome) {
     app.appendChild(renderWelcomeModal());
+  }
+  if (state.showPrivacyPolicy) {
+    app.appendChild(renderPrivacyPolicyModal());
+  }
+  if (state.showTermsOfUse) {
+    app.appendChild(renderTermsOfUseModal());
   }
   if (state.current.pendingHint) {
     app.appendChild(renderHintConfirmModal());
@@ -455,6 +464,100 @@ function renderWelcomeModal() {
     if (e.target === overlay) close();
   });
   overlay.querySelector("#closeWelcomeX").addEventListener("click", close);
+  return overlay;
+}
+
+const TWITTER_URL = "https://x.com/QuizzyGame";
+const CONTACT_EMAIL = "quizzy@quizzygame.com";
+
+function renderFooter() {
+  const footer = document.createElement("div");
+  footer.className = "app-footer";
+  footer.innerHTML = `
+    <span class="footer-copyright">© ${new Date().getFullYear()} Quizzy. All rights reserved.</span>
+    <div class="footer-links">
+      <button class="footer-link" id="footerPrivacyBtn">Privacy Policy</button>
+      <button class="footer-link" id="footerTermsBtn">Terms of Use</button>
+    </div>
+    <div class="footer-social">
+      <a class="footer-icon-link" href="${TWITTER_URL}" target="_blank" rel="noopener noreferrer" aria-label="Quizzy on Twitter/X">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+      </a>
+      <a class="footer-icon-link" href="mailto:${CONTACT_EMAIL}" aria-label="Email Quizzy">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="4.5" width="19" height="15" rx="2"/><path d="M3 6.5l9 6.5 9-6.5"/></svg>
+      </a>
+    </div>
+  `;
+  footer.querySelector("#footerPrivacyBtn").addEventListener("click", () => {
+    state.showPrivacyPolicy = true;
+    render();
+  });
+  footer.querySelector("#footerTermsBtn").addEventListener("click", () => {
+    state.showTermsOfUse = true;
+    render();
+  });
+  return footer;
+}
+
+function renderPrivacyPolicyModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <button class="modal-close-btn" id="closePrivacyX" aria-label="Close">&times;</button>
+      <h2 class="screen-title">Privacy Policy</h2>
+      <div class="modal-body">
+        <p><em>Last updated: July 21, 2026</em></p>
+        <p>Quizzy is a free, fan-made NBA trivia game. It doesn't have user accounts, doesn't require you to sign up, and doesn't collect or store any personal information.</p>
+        <p>Your score and game progress live only in your browser for the current session — nothing is saved to a server or shared with anyone.</p>
+        <p>Quizzy itself doesn't use cookies or analytics/tracking scripts. The site is hosted on GitHub Pages, which may log basic technical access information (like IP address and browser type) as part of its own infrastructure — see <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener noreferrer">GitHub's Privacy Statement</a> for details on that.</p>
+        <p>If you email us, we'll have whatever information you choose to include in that email (like your email address) so we can respond.</p>
+        <p>If Quizzy ever adds accounts, ads, or analytics in the future, this policy will be updated to reflect that before it happens.</p>
+        <p>Questions? Reach out at <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
+      </div>
+      <button class="btn btn-primary btn-lg" id="closePrivacy">Got It</button>
+    </div>
+  `;
+  const close = () => {
+    state.showPrivacyPolicy = false;
+    render();
+  };
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.querySelector("#closePrivacyX").addEventListener("click", close);
+  overlay.querySelector("#closePrivacy").addEventListener("click", close);
+  return overlay;
+}
+
+function renderTermsOfUseModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <button class="modal-close-btn" id="closeTermsX" aria-label="Close">&times;</button>
+      <h2 class="screen-title">Terms of Use</h2>
+      <div class="modal-body">
+        <p><em>Last updated: July 21, 2026</em></p>
+        <p>Quizzy is a free trivia game made for fun by an NBA fan. It is not affiliated with, endorsed by, or sponsored by the NBA, its teams, or any players — player names, stats, and team names appear here purely for trivia purposes.</p>
+        <p>Quizzy is provided "as is," with no guarantee that every stat or fact is 100% accurate, and no warranty of any kind. Use it for fun, not as a source of record.</p>
+        <p>By using Quizzy, you agree not to misuse the site — for example, by attempting to disrupt it, scrape it at scale, or reverse-engineer it for commercial resale.</p>
+        <p>To the fullest extent permitted by law, Quizzy and its creator aren't liable for any damages arising from your use of the site.</p>
+        <p>These terms may be updated from time to time; continuing to use Quizzy after a change means you accept the updated terms.</p>
+        <p>Questions? Reach out at <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
+      </div>
+      <button class="btn btn-primary btn-lg" id="closeTerms">Got It</button>
+    </div>
+  `;
+  const close = () => {
+    state.showTermsOfUse = false;
+    render();
+  };
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.querySelector("#closeTermsX").addEventListener("click", close);
+  overlay.querySelector("#closeTerms").addEventListener("click", close);
   return overlay;
 }
 

@@ -835,6 +835,52 @@ button {
   color: var(--text);
   border-color: var(--accent-2);
 }
+.app-footer {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding: 16px 4px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.footer-copyright { white-space: nowrap; }
+.footer-links {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.footer-link {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+}
+.footer-link:hover { color: var(--accent-2); text-decoration: underline; }
+.footer-social {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.footer-icon-link {
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  transition: all 0.15s ease;
+}
+.footer-icon-link:hover { color: var(--accent-2); border-color: var(--accent-2); }
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -911,6 +957,8 @@ button {
   .app-header { gap: 4px; }
   .brand-dots { margin-top: 0; }
   .how-to-play-btn { padding: 6px 14px; font-size: 12px; margin-bottom: 0; }
+
+  .app-footer { justify-content: center; text-align: center; font-size: 12px; }
 
   .card { padding: 18px 16px; gap: 12px; }
   h2.screen-title { font-size: 21px; }
