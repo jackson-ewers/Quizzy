@@ -9,8 +9,9 @@ let playersSearch = [];
 let fillBlankBoards = [];
 let awardsSeasonQuestions = [];
 let trophyCaseQuestions = [];
+let teammatesQuestions = [];
 
-const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank", "awardsSeason", "trophyCase"];
+const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank", "awardsSeason", "trophyCase", "teammates"];
 
 const TOPIC_META = {
   decade: {
@@ -56,6 +57,11 @@ const TOPIC_META = {
     color: "var(--accent-8)",
     description: "You'll see a mystery player's full career accolade resume — guess who it is.",
   },
+  teammates: {
+    title: "Teammates",
+    color: "var(--accent-9)",
+    description: "You'll see a mystery player's name — guess who they played the most games with as a teammate.",
+  },
 };
 
 const HINTS = {
@@ -91,6 +97,10 @@ const HINTS = {
     { key: "years", label: "Years Active", value: (q) => q.years },
     { key: "team", label: "Teams", value: (q) => q.team },
   ],
+  teammates: [
+    { key: "pos", label: "Teammate's Position", value: (q) => q.pos },
+    { key: "team", label: "Team(s) Together", value: (q) => q.team },
+  ],
 };
 
 const DIFFICULTY_LEVELS = {
@@ -120,6 +130,7 @@ function freshState() {
       fillBlank: new Set(),
       awardsSeason: new Set(),
       trophyCase: new Set(),
+      teammates: new Set(),
     },
     wheelRotation: 0,
     showHowToPlay: false,
@@ -129,6 +140,7 @@ function freshState() {
       question: null,
       wager: null,
       hintsRevealed: [],
+      pendingHint: null,
       selectedPlayer: null,
       selectedCollege: null,
       totSelections: [null, null, null],
@@ -233,17 +245,28 @@ function pickThisOrThatQuestion() {
   return { statKey, statLabel: fullPool.label, pairs };
 }
 
+const FILL_BLANK_FORMATS = ["season", "decade", "allTime", "team"];
+
 function pickFillBlankQuestion() {
   const cutoff = cutoffYear();
-  // all-time / all-time-playoffs boards are fixed historical facts, so they're
-  // not filtered by difficulty - only season-scope boards are
-  const eligible = fillBlankBoards.filter((b) => b.scope !== "season" || b.seasonYear >= cutoff);
+  // all-time boards are fixed historical facts, so they're not filtered by
+  // difficulty - season, decade, and team-roster boards all have a real point
+  // in time and are filtered by that year
+  const eligible = fillBlankBoards.filter((b) => b.format === "allTime" || b.seasonYear >= cutoff);
+
+  // split evenly across the 4 board formats, regardless of how many boards exist
+  // within each one (season and team boards vastly outnumber decade and all-time)
+  const byFormat = {};
+  for (const f of FILL_BLANK_FORMATS) byFormat[f] = eligible.filter((b) => b.format === f);
+  const availableFormats = FILL_BLANK_FORMATS.filter((f) => byFormat[f].length > 0);
+  const format = availableFormats[Math.floor(Math.random() * availableFormats.length)];
+  const pool = byFormat[format];
 
   const used = state.usedQuestionIds.fillBlank;
-  let candidates = eligible.filter((b) => !used.has(b.id));
+  let candidates = pool.filter((b) => !used.has(b.id));
   if (candidates.length === 0) {
-    used.clear();
-    candidates = eligible;
+    pool.forEach((b) => used.delete(b.id));
+    candidates = pool;
   }
   const board = candidates[Math.floor(Math.random() * candidates.length)];
   used.add(board.id);
@@ -272,6 +295,7 @@ function pickQuestion(topic) {
     draft: draftQuestions,
     awardsSeason: awardsSeasonQuestions,
     trophyCase: trophyCaseQuestions,
+    teammates: teammatesQuestions,
   };
   const fullPool = poolByTopic[topic];
   const pool = fullPool.filter((q) => {
@@ -360,6 +384,9 @@ function questionText(topic, q) {
     const list = q.accolades.map((a) => `${a.count}x ${a.type}`).join(", ");
     return `Here's a mystery player's career accolades: <span class="hl">${list}</span>. Who is it?`;
   }
+  if (topic === "teammates") {
+    return `<span class="hl">${q.name}</span> played <span class="hl">${q.sharedGames.toLocaleString()}</span> combined regular-season and playoff games with one teammate more than anyone else in their career. Who was it?`;
+  }
   return `Here's a mystery player's season-by-season stat line. Who is it?`;
 }
 
@@ -367,13 +394,14 @@ function correctAnswerName(topic, q) {
   if (topic === "decade") return q.answerName;
   if (topic === "college") return q.college;
   if (topic === "fillBlank") return q.answerName;
+  if (topic === "teammates") return q.answerName;
   return q.name;
 }
 
 function isCorrectGuess(topic, q, selectedId) {
   if (topic === "college") return selectedId === q.college;
   if (topic === "fillBlank") return selectedId === q.answerId;
-  const answerId = topic === "decade" ? q.answerId : q.playerId;
+  const answerId = topic === "decade" || topic === "teammates" ? q.answerId : q.playerId;
   return selectedId === answerId;
 }
 
@@ -401,6 +429,9 @@ function render() {
   }
   if (state.showWelcome) {
     app.appendChild(renderWelcomeModal());
+  }
+  if (state.current.pendingHint) {
+    app.appendChild(renderHintConfirmModal());
   }
 }
 
@@ -596,6 +627,7 @@ function screenWheel() {
     fillBlank: "#f2b705",
     awardsSeason: "#0891b2",
     trophyCase: "#92400e",
+    teammates: "#dc2626",
   };
   const gradientStops = segTopics
     .map((t, i) => `${segColorHex[t]} ${i * segAngle}deg ${(i + 1) * segAngle}deg`)
@@ -650,6 +682,7 @@ function screenWheel() {
       state.current.selectedPlayer = null;
       state.current.selectedCollege = null;
       state.current.hintsRevealed = [];
+      state.current.pendingHint = null;
       resultEl.textContent = `${TOPIC_META[topic].title}!`;
       resultEl.style.color = TOPIC_META[topic].color;
       setTimeout(() => {
@@ -716,6 +749,77 @@ function screenWager() {
   return card;
 }
 
+// Shared hint row for every topic: renders a labeled section so hints read as
+// hints (not just plain buttons), and routes every reveal through a confirm
+// popup rather than revealing instantly on tap.
+function renderHintRow(topic, q, revealedTextFor) {
+  const wrap = document.createElement("div");
+  wrap.className = "hint-section";
+
+  const label = document.createElement("div");
+  label.className = "hint-row-label";
+  label.innerHTML = `<span class="hint-icon">💡</span> Hints — tap to reveal (costs you)`;
+  wrap.appendChild(label);
+
+  const hintRow = document.createElement("div");
+  hintRow.className = "hint-row";
+  HINTS[topic].forEach((hint) => {
+    const btn = document.createElement("button");
+    const revealed = state.current.hintsRevealed.includes(hint.key);
+    btn.className = "hint-btn" + (revealed ? " revealed" : "");
+    const valueText = revealed ? revealedTextFor(hint, q) : "Tap to reveal";
+    btn.innerHTML = `<span class="hint-label">${hint.label}</span><span class="hint-value">${valueText}</span>`;
+    btn.disabled = revealed;
+    btn.addEventListener("click", () => {
+      if (revealed) return;
+      state.current.pendingHint = { topic, key: hint.key, label: hint.label };
+      render();
+    });
+    hintRow.appendChild(btn);
+  });
+  wrap.appendChild(hintRow);
+  return wrap;
+}
+
+function confirmPendingHint() {
+  const pending = state.current.pendingHint;
+  if (pending && !state.current.hintsRevealed.includes(pending.key)) {
+    state.current.hintsRevealed.push(pending.key);
+    resetTimer();
+  }
+  state.current.pendingHint = null;
+  render();
+}
+
+function cancelPendingHint() {
+  state.current.pendingHint = null;
+  render();
+}
+
+function renderHintConfirmModal() {
+  const pending = state.current.pendingHint;
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card hint-confirm-card">
+      <h2 class="screen-title">Use this hint?</h2>
+      <div class="modal-body" style="text-align:center;">
+        <p>Reveal the <strong>${pending.label}</strong> hint? Your timer resets to 60 seconds, and using it shrinks your reward — or raises your penalty — for this round.</p>
+      </div>
+      <div class="hint-confirm-actions">
+        <button class="btn btn-ghost" id="hintCancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="hintConfirmBtn">Reveal Hint</button>
+      </div>
+    </div>
+  `;
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) cancelPendingHint();
+  });
+  overlay.querySelector("#hintCancelBtn").addEventListener("click", cancelPendingHint);
+  overlay.querySelector("#hintConfirmBtn").addEventListener("click", confirmPendingHint);
+  return overlay;
+}
+
 function screenQuestion() {
   const topic = state.current.topic;
   if (topic === "thisOrThat") return screenThisOrThat();
@@ -769,31 +873,9 @@ function screenQuestion() {
   reminder.innerHTML = `Wagering <strong>${state.current.wager}</strong> point${state.current.wager === 1 ? "" : "s"}`;
   card.appendChild(reminder);
 
-  const hintRow = document.createElement("div");
-  hintRow.className = "hint-row";
-  HINTS[topic].forEach((hint) => {
-    const btn = document.createElement("button");
-    const revealed = state.current.hintsRevealed.includes(hint.key);
-    btn.className = "hint-btn" + (revealed ? " revealed" : "");
-    if (topic === "playerCareer") {
-      btn.innerHTML = revealed
-        ? `<span class="hint-label">${hint.label}</span><span class="hint-value">Shown in table</span>`
-        : `<span class="hint-label">${hint.label}</span><span class="hint-value">Tap to reveal</span>`;
-    } else {
-      btn.innerHTML = revealed
-        ? `<span class="hint-label">${hint.label}</span><span class="hint-value">${hint.value(q)}</span>`
-        : `<span class="hint-label">${hint.label}</span><span class="hint-value">Tap to reveal</span>`;
-    }
-    btn.addEventListener("click", () => {
-      if (!state.current.hintsRevealed.includes(hint.key)) {
-        state.current.hintsRevealed.push(hint.key);
-        resetTimer();
-        render();
-      }
-    });
-    hintRow.appendChild(btn);
-  });
-  card.appendChild(hintRow);
+  card.appendChild(
+    renderHintRow(topic, q, (hint) => (topic === "playerCareer" ? "Shown in table" : hint.value(q)))
+  );
 
   const hintCount = state.current.hintsRevealed.length;
   const stakes = document.createElement("div");
@@ -1048,25 +1130,7 @@ function screenThisOrThat() {
   card.appendChild(header);
 
   if (!revealed) {
-    const hintRow = document.createElement("div");
-    hintRow.className = "hint-row";
-    HINTS.thisOrThat.forEach((hint) => {
-      const btn = document.createElement("button");
-      const hintRevealed = state.current.hintsRevealed.includes(hint.key);
-      btn.className = "hint-btn" + (hintRevealed ? " revealed" : "");
-      btn.innerHTML = hintRevealed
-        ? `<span class="hint-label">${hint.label}</span><span class="hint-value">Shown below each name</span>`
-        : `<span class="hint-label">${hint.label}</span><span class="hint-value">Tap to reveal</span>`;
-      btn.addEventListener("click", () => {
-        if (!state.current.hintsRevealed.includes(hint.key)) {
-          state.current.hintsRevealed.push(hint.key);
-          resetTimer();
-          render();
-        }
-      });
-      hintRow.appendChild(btn);
-    });
-    card.appendChild(hintRow);
+    card.appendChild(renderHintRow("thisOrThat", q, () => "Shown below each name"));
   }
 
   const list = document.createElement("div");
@@ -1220,6 +1284,7 @@ function screenResult() {
       question: null,
       wager: null,
       hintsRevealed: [],
+      pendingHint: null,
       selectedPlayer: null,
       selectedCollege: null,
       totSelections: [null, null, null],
@@ -1274,7 +1339,7 @@ function screenEnd() {
 
 // ---------- Boot ----------
 async function loadData() {
-  const [d, pc, tot, cq, cs, dq, p, fb, as, tc] = await Promise.all([
+  const [d, pc, tot, cq, cs, dq, p, fb, as, tc, tm] = await Promise.all([
     fetch("data/decade_questions.json").then((r) => r.json()),
     fetch("data/player_career_questions.json").then((r) => r.json()),
     fetch("data/this_or_that_pool.json").then((r) => r.json()),
@@ -1285,6 +1350,7 @@ async function loadData() {
     fetch("data/fill_blank_boards.json").then((r) => r.json()),
     fetch("data/awards_season_questions.json").then((r) => r.json()),
     fetch("data/trophy_case_questions.json").then((r) => r.json()),
+    fetch("data/teammates_questions.json").then((r) => r.json()),
   ]);
   decadeQuestions = d;
   playerCareerQuestions = pc;
@@ -1296,6 +1362,7 @@ async function loadData() {
   fillBlankBoards = fb;
   awardsSeasonQuestions = as;
   trophyCaseQuestions = tc;
+  teammatesQuestions = tm;
 }
 
 loadData().then(render);

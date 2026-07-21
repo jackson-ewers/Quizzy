@@ -12,6 +12,7 @@ Outputs (into ./data/):
   - awards_season_questions.json "Awards Season" question pool (guess who won a given award in a given season)
   - trophy_case_questions.json "Trophy Case" question pool (guess the player from their career accolade resume)
   - fill_blank_boards.json    "Fill in the Blank" top-5 stat leaderboards
+  - teammates_questions.json  "Teammates" question pool (guess a player's most-played-with teammate)
 """
 import csv
 import json
@@ -248,6 +249,10 @@ def main():
     # regular-season career games at (their "primary" position)
     career_pos_games = defaultdict(lambda: defaultdict(float))
 
+    # accumulate per (player, decade) -> position -> games, for fill_blank_boards'
+    # decade-scope position hint (most games played at a position during that decade)
+    decade_player_pos_games = defaultdict(lambda: defaultdict(float))
+
     # accumulate per (player, season) -> combined season totals, for player_career_questions
     # and fill_blank_boards
     season_totals = defaultdict(
@@ -286,6 +291,7 @@ def main():
             if franchise_id:
                 team_decade_player_pos_games[(franchise_id, decade, pid)][pos] += r["g"] or 0
             career_pos_games[pid][pos] += r["g"] or 0
+            decade_player_pos_games[(pid, decade)][pos] += r["g"] or 0
 
         s = season_totals[(pid, season)]
         s["g"] += r["g"] or 0
@@ -746,10 +752,96 @@ def main():
         json.dump(trophy_case_questions, f, ensure_ascii=False)
     print(f"trophy_case_questions.json: {len(trophy_case_questions)} questions ({dropped_ambiguous} ambiguous resumes dropped)")
 
+    # ---- teammates_questions.json ----
+    # Guess who a mystery player played the most games with as an actual
+    # teammate: same team, same game, counted from player_game_logs joined to
+    # all_league_games, regular season + playoffs combined, excluding Play-In
+    # Games and the NBA Cup Final. Only players with 5+ career All-NBA
+    # selections can be the *prompted* player (the mystery name shown) - the
+    # answer (the teammate being guessed) has no such requirement at all, so
+    # an obscure role player can absolutely be the correct answer. Difficulty
+    # filters on the prompted player's own career span only, per user's
+    # explicit example (LeBron counts for Easy even though his most-played
+    # teammate, Ilgauskas, started in the 1990s and has no All-NBA selections).
+    MIN_TEAMMATES_ALL_NBA = 5
+    MIN_SHARED_GAMES = 20  # keep the "played together" flavor stat meaningful
+
+    all_nba_counts = defaultdict(int)
+    for r in con.execute("SELECT player_id FROM player_accolades WHERE award_type = 'All-NBA'"):
+        all_nba_counts[r["player_id"]] += 1
+    prompt_eligible_ids = {pid for pid, c in all_nba_counts.items() if c >= MIN_TEAMMATES_ALL_NBA}
+
+    eligible_game_ids = {
+        r["game_id"]
+        for r in con.execute(
+            "SELECT game_id FROM all_league_games WHERE game_type IN ('Regular Season', 'Playoffs') "
+            "AND (notes IS NULL OR notes NOT IN ('Play-In Game', 'NBA Cup Final'))"
+        )
+    }
+
+    # (game_id, team_id) -> [player_id, ...] on that team, in that game
+    group_players = defaultdict(list)
+    # player_id -> [(game_id, team_id), ...], only tracked for prompt-eligible players
+    groups_by_prompt = defaultdict(list)
+    for r in con.execute("SELECT player_id, game_id, team_id FROM player_game_logs"):
+        if r["game_id"] not in eligible_game_ids:
+            continue
+        key = (r["game_id"], r["team_id"])
+        group_players[key].append(r["player_id"])
+        if r["player_id"] in prompt_eligible_ids:
+            groups_by_prompt[r["player_id"]].append(key)
+
+    teammates_questions = []
+    qid = 0
+    for pid, groups in groups_by_prompt.items():
+        co_games = defaultdict(int)
+        co_teams = defaultdict(set)
+        for game_id, team_id in groups:
+            for other in group_players[(game_id, team_id)]:
+                if other == pid:
+                    continue
+                co_games[other] += 1
+                co_teams[other].add(team_id)
+        if not co_games:
+            continue
+        answer_id, shared_games = max(co_games.items(), key=lambda kv: kv[1])
+        if shared_games < MIN_SHARED_GAMES:
+            continue
+        p = players.get(pid)
+        a = players.get(answer_id)
+        if not p or not a or p["from"] is None or p["to"] is None:
+            continue
+        team_codes = [t for t in co_teams[answer_id] if t in team_names]
+        if not team_codes:
+            continue
+        pos = primary_pos.get(answer_id, a["pos"])
+        if not pos:
+            continue
+        qid += 1
+        teammates_questions.append(
+            {
+                "id": qid,
+                "playerId": pid,
+                "name": p["name"],
+                "fromYear": p["from"],
+                "toYear": p["to"],
+                "sharedGames": shared_games,
+                "answerId": answer_id,
+                "answerName": a["name"],
+                "pos": pos,
+                "team": ", ".join(team_names[t] for t in sorted(team_codes)),
+            }
+        )
+    with open(OUT / "teammates_questions.json", "w", encoding="utf-8") as f:
+        json.dump(teammates_questions, f, ensure_ascii=False)
+    print(f"teammates_questions.json: {len(teammates_questions)} questions")
+
     # ---- fill_blank_boards.json ----
-    # Top-5 stat leaderboards (a specific regular season, all-time regular season
-    # career, all-time playoff career; total or per-game), plus All-NBA/All-Defensive
-    # team rosters for a specific season/tier. The client picks a board at runtime,
+    # Top-5 stat leaderboards, one of 4 formats (the client splits its random pick
+    # evenly 25/25/25/25 across these): a specific season, a specific decade,
+    # all-time career, or an All-NBA/All-Defensive team roster for a season/tier.
+    # Season/decade/all-time all offer regular-season and playoff variants, total
+    # or per-game, per FILL_BLANK_STATS below. The client picks a board at runtime,
     # blanks out one random player, and the user has to guess who's missing.
     FILL_BLANK_STATS = [
         ("pts", "Points", 0),
@@ -851,6 +943,7 @@ def main():
                         "statLabel": stat_label_for(stat_label, measure),
                         "measure": measure,
                         "scope": "season",
+                        "format": "season",
                         "scopeLabel": f"{season} Season",
                         "season": season,
                         "seasonYear": start_year,
@@ -913,12 +1006,130 @@ def main():
                         "statLabel": stat_label_for(stat_label, measure),
                         "measure": measure,
                         "scope": scope,
+                        "format": "allTime",
                         "scopeLabel": scope_label,
                         "season": None,
                         "seasonYear": None,
                         "players": top5,
                     }
                 )
+
+    # -- decade-scope boards (regular season and playoffs) --
+    # Same 4 stats as season-scope, aggregated across a whole decade instead of one
+    # season. Regular season gets total + per-game; playoffs is total-only (playoff
+    # per-decade sample sizes get thin enough that per-game is less meaningful), and
+    # 3-Pointers Made isn't offered for playoffs at all, matching the all-time rule.
+    MIN_GAMES_DECADE_PG = 200  # min games across that whole decade to qualify for a per-game board
+
+    decade_reg_totals = defaultdict(lambda: {"pts": 0, "trb": 0, "ast": 0, "tp": 0, "g": 0})
+    for (pid, season), s in season_totals.items():
+        d = decade_reg_totals[(pid, season_decade(season))]
+        d["pts"] += s["pts"]
+        d["trb"] += s["trb"]
+        d["ast"] += s["ast"]
+        d["tp"] += s["tp"]
+        d["g"] += s["g"]
+
+    decade_reg_teams = defaultdict(list)
+    for r in con.execute('SELECT player_id, team, season FROM players_reg_szn_totals ORDER BY season'):
+        team = (r["team"] or "").strip()
+        if team in MULTI_TEAM_CODES or team not in team_names:
+            continue
+        lst = decade_reg_teams[(r["player_id"], season_decade(r["season"]))]
+        if team not in lst:
+            lst.append(team)
+
+    decade_po_totals = defaultdict(lambda: {"pts": 0, "trb": 0, "ast": 0, "tp": 0, "g": 0})
+    decade_po_teams = defaultdict(list)
+    decade_po_pos_games = defaultdict(lambda: defaultdict(float))
+    for r in con.execute(
+        'SELECT player_id, team, season, pts, trb, ast, "3p" as tp, g, pos FROM players_post_szn_totals ORDER BY season'
+    ):
+        team = (r["team"] or "").strip()
+        if team not in team_names:
+            continue
+        decade = season_decade(r["season"])
+        pid = r["player_id"]
+        d = decade_po_totals[(pid, decade)]
+        d["pts"] += r["pts"] or 0
+        d["trb"] += r["trb"] or 0
+        d["ast"] += r["ast"] or 0
+        d["tp"] += r["tp"] or 0
+        d["g"] += r["g"] or 0
+        lst = decade_po_teams[(pid, decade)]
+        if team not in lst:
+            lst.append(team)
+        pos = (r["pos"] or "").strip()
+        if pos:
+            decade_po_pos_games[(pid, decade)][pos] += r["g"] or 0
+
+    DECADE_SCOPES = [
+        ("decadeReg", "Regular Season", decade_reg_totals, decade_reg_teams, decade_player_pos_games, MIN_GAMES_DECADE_PG, True),
+        ("decadePlayoffs", "Playoffs", decade_po_totals, decade_po_teams, decade_po_pos_games, MIN_GAMES_DECADE_PG, False),
+    ]
+    for scope, scope_suffix, totals_by_decade_player, teams_by_decade_player, pos_by_decade_player, min_games_pg, allow_per_game in DECADE_SCOPES:
+        by_decade = defaultdict(list)
+        for (pid, decade), d in totals_by_decade_player.items():
+            by_decade[decade].append((pid, d))
+
+        for decade, plist in by_decade.items():
+            for stat_key, stat_label, min_year in FILL_BLANK_STATS:
+                if stat_key == "3p" and (not allow_per_game or decade < 1980):
+                    # no 3-Pointers Made board for playoffs at all, and regular-season
+                    # 3PM only once the whole decade is inside the 3-point era
+                    continue
+                measures = ("total", "perGame") if (stat_key != "3p" and allow_per_game) else ("total",)
+                for measure in measures:
+                    entries = []
+                    for pid, d in plist:
+                        p = players.get(pid)
+                        if not p or not p["pos"]:
+                            continue
+                        games = d["g"] or 0
+                        if games <= 0:
+                            continue
+                        raw = d[stat_key if stat_key != "3p" else "tp"]
+                        if measure == "perGame":
+                            if games < min_games_pg:
+                                continue
+                            value = round(raw / games, 1)
+                        else:
+                            value = round(raw)
+                        if value <= 0:
+                            continue
+                        teams = teams_by_decade_player.get((pid, decade)) or []
+                        if not teams:
+                            continue
+                        pos_games = pos_by_decade_player.get((pid, decade))
+                        pos = max(pos_games.items(), key=lambda kv: kv[1])[0] if pos_games else p["pos"]
+                        entries.append(
+                            {
+                                "playerId": pid,
+                                "name": p["name"],
+                                "value": value,
+                                "pos": pos,
+                                "team": ", ".join(team_names[t] for t in teams),
+                            }
+                        )
+                    entries.sort(key=lambda e: -e["value"])
+                    top5 = entries[:5]
+                    if len(top5) < 5:
+                        continue
+                    bid += 1
+                    fill_blank_boards.append(
+                        {
+                            "id": bid,
+                            "statKey": stat_key,
+                            "statLabel": stat_label_for(stat_label, measure),
+                            "measure": measure,
+                            "scope": scope,
+                            "format": "decade",
+                            "scopeLabel": f"{decade}s ({scope_suffix})",
+                            "season": None,
+                            "seasonYear": decade,
+                            "players": top5,
+                        }
+                    )
 
     # -- All-NBA / All-Defensive team roster boards --
     # e.g. "2015 2nd Team All-NBA" - no stat value, just the 5-player roster for
@@ -966,6 +1177,7 @@ def main():
                 "statLabel": f"{start_year} {ordinal} Team {award_type}",
                 "measure": "roster",
                 "scope": "season",
+                "format": "team",
                 "scopeLabel": f"{season} Season",
                 "season": season,
                 "seasonYear": start_year,
