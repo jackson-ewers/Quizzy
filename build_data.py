@@ -69,6 +69,29 @@ def load_team_names():
     return names
 
 
+def load_franchise_map():
+    """Maps each historical Team ID to its current Franchise ID and current
+    Franchise display name, but only for teams whose overall franchise is
+    still active today (Franchise Status == Active). Team IDs whose franchise
+    is defunct (e.g. Anderson Packers) are left out entirely. Used by Decade
+    Team Leader, which needs to group historical team-code stints (e.g. the
+    Bobcats-to-Hornets rename, CHA -> CHO) together under one continuous,
+    currently-active franchise instead of splitting a player's stats across
+    both old and new codes.
+    """
+    franchise_id_by_team = {}
+    franchise_name_by_id = {}
+    with open(TEAMS_CSV, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if row["Franchise Status"].strip() != "Active":
+                continue
+            team_id = row["Team ID"].strip()
+            franchise_id = row["Franchise ID"].strip()
+            franchise_id_by_team[team_id] = franchise_id
+            franchise_name_by_id.setdefault(franchise_id, row["Franchise"].strip())
+    return franchise_id_by_team, franchise_name_by_id
+
+
 # college_conferences.csv is a flat single-column export: a conference name row
 # (e.g. "ACC"), followed by that conference's member schools as "School Mascot"
 # rows, repeating for every conference. These are exactly those header rows.
@@ -180,6 +203,7 @@ def main():
     con.row_factory = sqlite3.Row
 
     team_names = load_team_names()
+    franchise_id_by_team, franchise_name_by_id = load_franchise_map()
 
     players = {
         r["player_id"]: {
@@ -245,16 +269,22 @@ def main():
         season = r["season"]
         decade = season_decade(season)
 
-        for stat_key, _, min_year in STATS:
-            if min_year and decade < min_year:
-                continue
-            col = "tp" if stat_key == "3p" else stat_key
-            val = r[col] or 0
-            stat_totals[(team, decade, stat_key)][pid] += val
+        # Decade Team Leader groups by the current, still-active franchise (e.g. CHA
+        # and CHO both roll up under one Charlotte Hornets franchise) rather than the
+        # historical team code - stints with a defunct franchise don't count at all.
+        franchise_id = franchise_id_by_team.get(team)
+        if franchise_id:
+            for stat_key, _, min_year in STATS:
+                if min_year and decade < min_year:
+                    continue
+                col = "tp" if stat_key == "3p" else stat_key
+                val = r[col] or 0
+                stat_totals[(franchise_id, decade, stat_key)][pid] += val
 
         pos = (r["pos"] or "").strip()
         if pos:
-            team_decade_player_pos_games[(team, decade, pid)][pos] += r["g"] or 0
+            if franchise_id:
+                team_decade_player_pos_games[(franchise_id, decade, pid)][pos] += r["g"] or 0
             career_pos_games[pid][pos] += r["g"] or 0
 
         s = season_totals[(pid, season)]
@@ -282,7 +312,7 @@ def main():
     # ---- decade_questions.json ----
     decade_questions = []
     qid = 0
-    for (team, decade, stat_key), player_vals in stat_totals.items():
+    for (franchise_id, decade, stat_key), player_vals in stat_totals.items():
         if not player_vals:
             continue
         best_pid, best_val = max(player_vals.items(), key=lambda kv: kv[1])
@@ -293,15 +323,15 @@ def main():
             continue
         stat_label = next(lbl for k, lbl, _ in STATS if k == stat_key)
         qid += 1
-        pos_games = team_decade_player_pos_games.get((team, decade, best_pid))
+        pos_games = team_decade_player_pos_games.get((franchise_id, decade, best_pid))
         pos = max(pos_games.items(), key=lambda kv: kv[1])[0] if pos_games else p["pos"]
         decade_questions.append(
             {
                 "id": qid,
                 "decade": decade,
                 "decadeLabel": f"{decade}s",
-                "teamAbbr": team,
-                "teamName": team_names[team],
+                "teamAbbr": franchise_id,
+                "teamName": franchise_name_by_id[franchise_id],
                 "statKey": stat_key,
                 "statLabel": stat_label,
                 "value": round(best_val),
