@@ -56,8 +56,13 @@ PAIR_RATIO_MIN = 0.5
 
 
 def season_decade(season: str) -> int:
+    # "Decade" is shifted one season earlier than a strict start-year-mod-10
+    # bucketing, to match all-decade-team convention: the "1990s" is the
+    # 1989-90 season through 1998-99 (not 1990-91 through 1999-00), so a
+    # rookie's debut season anchors their decade the way "all-1990s team"
+    # usually implies. Season start year Y maps to decade ((Y+1)//10)*10.
     start_year = int(season.split("-")[0])
-    return (start_year // 10) * 10
+    return ((start_year + 1) // 10) * 10
 
 
 def load_team_names():
