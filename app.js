@@ -313,6 +313,12 @@ function pickQuestion(topic) {
   const pool = fullPool.filter((q) => {
     if (topic === "decade") return q.decade >= cutoff;
     if (topic === "awardsSeason") return q.seasonYear >= cutoff;
+    // Draft filters on the draft itself, not the player's rookie season -
+    // draft-and-stash picks (e.g. international players) can debut a year
+    // or more after being drafted, so fromYear alone would let an old draft
+    // sneak into a "2000-present" difficulty just because the player's
+    // actual NBA debut happened to land in that window.
+    if (topic === "draft") return q.draftYear >= cutoff;
     return q.fromYear >= cutoff;
   });
 
