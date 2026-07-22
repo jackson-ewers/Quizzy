@@ -139,6 +139,7 @@ function freshState() {
     showTermsOfUse: false,
     isReplay: false,
     replayQueue: null,
+    replayLinkExpired: false,
     current: {
       topic: null,
       question: null,
@@ -244,9 +245,13 @@ function pickThisOrThatQuestion() {
   }
 
   chosen.forEach(({ i }) => used.add(`${statKey}:${i}`));
-  const pairs = chosen.map(({ pair }) => (Math.random() < 0.5 ? [pair[0], pair[1]] : [pair[1], pair[0]]));
+  const flips = chosen.map(() => Math.random() < 0.5);
+  const pairs = chosen.map(({ pair }, k) => (flips[k] ? [pair[1], pair[0]] : [pair[0], pair[1]]));
 
-  return { statKey, statLabel: fullPool.label, pairs };
+  // pairIndices/flips let a Challenge link reference these 3 match-ups by a
+  // small integer position + a flip bit each, instead of embedding all 6
+  // players' full IDs - a big size saving in the shared URL.
+  return { statKey, statLabel: fullPool.label, pairs, pairIndices: chosen.map((c) => c.i), flips };
 }
 
 const FILL_BLANK_FORMATS = ["season", "decade", "allTime", "team"];
@@ -325,53 +330,120 @@ function pickQuestion(topic) {
 // A "Challenge a Friend" link has to reproduce the exact same question every
 // round, not just the same topic - these capture just enough per-question
 // identity to look the same question back up later, and reverse that lookup.
+// Kept as small as possible (short keys, indices instead of full IDs for
+// This or That) since the whole thing has to fit in a URL that gets pasted
+// into texts/tweets - a naive encoding of a 10-round game can run past 2500
+// characters, which real messaging apps will truncate or mangle in transit.
 function questionReplaySpec(topic, q) {
   if (topic === "thisOrThat") {
-    return { topic, statKey: q.statKey, pairIds: q.pairs.map(([a, b]) => [a.id, b.id]) };
+    return { t: topic, s: q.statKey, i: q.pairIndices, f: q.flips.map((f) => (f ? 1 : 0)) };
   }
   if (topic === "fillBlank") {
-    return { topic, id: q.id, blankIndex: q.blankIndex };
+    return { t: topic, i: q.id, b: q.blankIndex };
   }
-  return { topic, id: q.id };
+  return { t: topic, i: q.id };
 }
 
+// Returns null (never throws) if the spec can't be resolved against the
+// currently-loaded data - e.g. a challenge link made before a data rebuild
+// changed a topic's question IDs. Callers treat null as "this link expired."
 function pickQuestionFromSpec(spec) {
-  if (spec.topic === "thisOrThat") {
-    const fullPool = thisOrThatPool[spec.statKey];
-    const pairs = spec.pairIds.map(([aId, bId]) => {
-      const found = fullPool.pairs.find(
-        (p) => (p[0].id === aId && p[1].id === bId) || (p[0].id === bId && p[1].id === aId)
-      );
-      return found[0].id === aId ? [found[0], found[1]] : [found[1], found[0]];
-    });
-    return { statKey: spec.statKey, statLabel: fullPool.label, pairs };
+  try {
+    if (spec.t === "thisOrThat") {
+      const fullPool = thisOrThatPool[spec.s];
+      if (!fullPool) return null;
+      const pairs = spec.i.map((idx, k) => {
+        const pair = fullPool.pairs[idx];
+        if (!pair) throw new Error("missing pair");
+        return spec.f[k] ? [pair[1], pair[0]] : [pair[0], pair[1]];
+      });
+      return { statKey: spec.s, statLabel: fullPool.label, pairs };
+    }
+    if (spec.t === "fillBlank") {
+      const board = fillBlankBoards.find((b) => b.id === spec.i);
+      if (!board) return null;
+      const blanked = board.players[spec.b];
+      if (!blanked) return null;
+      return {
+        ...board,
+        blankIndex: spec.b,
+        answerId: blanked.playerId,
+        answerName: blanked.name,
+        pos: blanked.pos,
+        team: blanked.team,
+      };
+    }
+    const pool = poolForTopic(spec.t);
+    if (!pool) return null;
+    return pool.find((q) => q.id === spec.i) || null;
+  } catch {
+    return null;
   }
-  if (spec.topic === "fillBlank") {
-    const board = fillBlankBoards.find((b) => b.id === spec.id);
-    const blanked = board.players[spec.blankIndex];
-    return {
-      ...board,
-      blankIndex: spec.blankIndex,
-      answerId: blanked.playerId,
-      answerName: blanked.name,
-      pos: blanked.pos,
-      team: blanked.team,
-    };
+}
+
+// Challenge links get pasted into texts/tweets, and real messaging apps turn
+// out to mangle even moderately long query strings - a 5-round game encoded
+// as base64'd JSON (672 characters) got split by iMessage's own link
+// detection into a truncated tappable link plus a separate inert text
+// fragment. So instead of JSON+base64, rounds are packed into a plain
+// dot/dash-separated string using only letters, digits, "." and "-" - all
+// of them safe, unescaped URL characters that link detectors handle
+// natively, with no base64 inflation on top.
+const REPLAY_TOPIC_CODES = {
+  decade: "d", playerCareer: "p", thisOrThat: "o", college: "c",
+  draft: "r", fillBlank: "f", awardsSeason: "a", trophyCase: "x", teammates: "m",
+};
+const REPLAY_TOPIC_CODES_REV = Object.fromEntries(Object.entries(REPLAY_TOPIC_CODES).map(([k, v]) => [v, k]));
+const REPLAY_STAT_CODES = { pts: "p", trb: "r", ast: "a", "3p": "3", dd: "d", td: "t" };
+const REPLAY_STAT_CODES_REV = Object.fromEntries(Object.entries(REPLAY_STAT_CODES).map(([k, v]) => [v, k]));
+const REPLAY_DIFFICULTY_CODES = { easy: "e", medium: "m", hard: "h" };
+const REPLAY_DIFFICULTY_CODES_REV = Object.fromEntries(Object.entries(REPLAY_DIFFICULTY_CODES).map(([k, v]) => [v, k]));
+
+function encodeRoundSpec(spec) {
+  const tc = REPLAY_TOPIC_CODES[spec.t];
+  if (spec.t === "thisOrThat") {
+    const sc = REPLAY_STAT_CODES[spec.s];
+    const fields = spec.i.flatMap((idx, k) => [idx, spec.f[k]]);
+    return [tc, sc, ...fields].join(".");
   }
-  return poolForTopic(spec.topic).find((q) => q.id === spec.id);
+  if (spec.t === "fillBlank") {
+    return [tc, spec.i, spec.b].join(".");
+  }
+  return [tc, spec.i].join(".");
+}
+
+function parseRoundSpec(str) {
+  const parts = str.split(".");
+  const topic = REPLAY_TOPIC_CODES_REV[parts[0]];
+  if (!topic) return null;
+  if (topic === "thisOrThat") {
+    const statKey = REPLAY_STAT_CODES_REV[parts[1]];
+    const nums = parts.slice(2).map(Number);
+    if (!statKey || nums.length !== 6 || nums.some(Number.isNaN)) return null;
+    return { t: topic, s: statKey, i: [nums[0], nums[2], nums[4]], f: [nums[1], nums[3], nums[5]] };
+  }
+  if (topic === "fillBlank") {
+    const id = Number(parts[1]);
+    const blankIndex = Number(parts[2]);
+    if (Number.isNaN(id) || Number.isNaN(blankIndex)) return null;
+    return { t: topic, i: id, b: blankIndex };
+  }
+  const id = Number(parts[1]);
+  return Number.isNaN(id) ? null : { t: topic, i: id };
 }
 
 function encodeReplayCode(specs, difficulty) {
-  const json = JSON.stringify({ d: difficulty, q: specs });
-  return btoa(encodeURIComponent(json)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return [REPLAY_DIFFICULTY_CODES[difficulty], ...specs.map(encodeRoundSpec)].join("-");
 }
 
 function decodeReplayCode(code) {
   try {
-    const b64 = code.replace(/-/g, "+").replace(/_/g, "/");
-    const payload = JSON.parse(decodeURIComponent(atob(b64)));
-    if (!payload || !Array.isArray(payload.q) || payload.q.length === 0) return null;
-    return payload;
+    const segments = code.split("-");
+    const difficulty = REPLAY_DIFFICULTY_CODES_REV[segments[0]];
+    if (!difficulty) return null;
+    const q = segments.slice(1).map(parseRoundSpec);
+    if (q.length === 0 || q.some((s) => s === null)) return null;
+    return { d: difficulty, q };
   } catch {
     return null;
   }
@@ -729,6 +801,11 @@ function screenStart() {
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
+    ${
+      state.replayLinkExpired
+        ? `<div class="replay-expired-banner">That challenge link isn't valid anymore (it was made before a data update) — here's a fresh game instead!</div>`
+        : ""
+    }
     <h2 class="screen-title">How many questions?</h2>
     <div class="choice-row">
       <button class="length-card ${state.gameLength === 5 ? "selected" : ""}" data-len="5">
@@ -826,7 +903,7 @@ function screenWheel() {
   spinBtn.addEventListener("click", () => {
     spinBtn.disabled = true;
     const topic = state.isReplay
-      ? state.replayQueue[state.round].topic
+      ? state.replayQueue[state.round].t
       : TOPIC_ORDER[Math.floor(Math.random() * TOPIC_ORDER.length)];
     const matchingIdx = segTopics.map((t, i) => (t === topic ? i : -1)).filter((i) => i >= 0);
     const idx = matchingIdx[Math.floor(Math.random() * matchingIdx.length)];
@@ -1545,7 +1622,8 @@ function screenEnd() {
     const specs = state.history.map((h) => h.spec);
     const code = encodeReplayCode(specs, state.difficulty);
     const url = `${siteUrl}?g=${code}`;
-    const text = `I scored ${scoreText} on this Quizzy quiz. Take the same one and see if you can top my score.`;
+    const diffLabel = DIFFICULTY_LEVELS[state.difficulty].label;
+    const text = `I scored ${scoreText} on a ${state.history.length}-question Quizzy (${diffLabel}) — take the same one and see if you can top my score.`;
     shareContent(text, url, shareStatus);
   });
 
@@ -1589,18 +1667,32 @@ async function loadData() {
   teammatesQuestions = tm;
 }
 
-function applyReplayFromURL() {
+function readReplayCodeFromURL() {
   const code = new URLSearchParams(location.search).get("g");
-  if (!code) return;
-  const payload = decodeReplayCode(code);
-  if (!payload) return;
-  state.isReplay = true;
-  state.replayQueue = payload.q;
-  state.difficulty = payload.d;
-  state.gameLength = payload.q.length;
-  state.showWelcome = false;
-  state.screen = "wheel";
+  return code ? decodeReplayCode(code) : null;
 }
 
-applyReplayFromURL();
-loadData().then(render);
+// Question data can get rebuilt/rebalanced over time (new topic, a bug fix
+// like the decade-boundary one, etc.), which can shift or drop the IDs an
+// older Challenge link points to. Rather than silently landing on the
+// normal start screen with no explanation (confusing - looks like the link
+// just did nothing), a link that can't be fully resolved shows a banner
+// explaining it's expired instead.
+const pendingReplay = readReplayCodeFromURL();
+
+loadData().then(() => {
+  if (pendingReplay) {
+    const resolvable = pendingReplay.q.every((spec) => pickQuestionFromSpec(spec) !== null);
+    if (resolvable) {
+      state.isReplay = true;
+      state.replayQueue = pendingReplay.q;
+      state.difficulty = pendingReplay.d;
+      state.gameLength = pendingReplay.q.length;
+      state.showWelcome = false;
+      state.screen = "wheel";
+    } else {
+      state.replayLinkExpired = true;
+    }
+  }
+  render();
+});

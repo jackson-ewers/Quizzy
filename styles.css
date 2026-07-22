@@ -216,6 +216,17 @@ button {
   font-size: 19px;
 }
 
+.replay-expired-banner {
+  width: 100%;
+  background: color-mix(in srgb, var(--accent-6) 14%, var(--surface-solid));
+  border: 1px solid var(--accent-6);
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+}
+
 .choice-row {
   display: flex;
   gap: 16px;
