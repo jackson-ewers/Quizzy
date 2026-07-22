@@ -137,6 +137,8 @@ function freshState() {
     showWelcome: false,
     showPrivacyPolicy: false,
     showTermsOfUse: false,
+    isReplay: false,
+    replayQueue: null,
     current: {
       topic: null,
       question: null,
@@ -285,12 +287,8 @@ function pickFillBlankQuestion() {
   };
 }
 
-function pickQuestion(topic) {
-  if (topic === "thisOrThat") return pickThisOrThatQuestion();
-  if (topic === "fillBlank") return pickFillBlankQuestion();
-
-  const cutoff = cutoffYear();
-  const poolByTopic = {
+function poolForTopic(topic) {
+  return {
     decade: decadeQuestions,
     playerCareer: playerCareerQuestions,
     college: collegeQuestions,
@@ -298,8 +296,15 @@ function pickQuestion(topic) {
     awardsSeason: awardsSeasonQuestions,
     trophyCase: trophyCaseQuestions,
     teammates: teammatesQuestions,
-  };
-  const fullPool = poolByTopic[topic];
+  }[topic];
+}
+
+function pickQuestion(topic) {
+  if (topic === "thisOrThat") return pickThisOrThatQuestion();
+  if (topic === "fillBlank") return pickFillBlankQuestion();
+
+  const cutoff = cutoffYear();
+  const fullPool = poolForTopic(topic);
   const pool = fullPool.filter((q) => {
     if (topic === "decade") return q.decade >= cutoff;
     if (topic === "awardsSeason") return q.seasonYear >= cutoff;
@@ -315,6 +320,61 @@ function pickQuestion(topic) {
   const q = candidates[Math.floor(Math.random() * candidates.length)];
   used.add(q.id);
   return q;
+}
+
+// A "Challenge a Friend" link has to reproduce the exact same question every
+// round, not just the same topic - these capture just enough per-question
+// identity to look the same question back up later, and reverse that lookup.
+function questionReplaySpec(topic, q) {
+  if (topic === "thisOrThat") {
+    return { topic, statKey: q.statKey, pairIds: q.pairs.map(([a, b]) => [a.id, b.id]) };
+  }
+  if (topic === "fillBlank") {
+    return { topic, id: q.id, blankIndex: q.blankIndex };
+  }
+  return { topic, id: q.id };
+}
+
+function pickQuestionFromSpec(spec) {
+  if (spec.topic === "thisOrThat") {
+    const fullPool = thisOrThatPool[spec.statKey];
+    const pairs = spec.pairIds.map(([aId, bId]) => {
+      const found = fullPool.pairs.find(
+        (p) => (p[0].id === aId && p[1].id === bId) || (p[0].id === bId && p[1].id === aId)
+      );
+      return found[0].id === aId ? [found[0], found[1]] : [found[1], found[0]];
+    });
+    return { statKey: spec.statKey, statLabel: fullPool.label, pairs };
+  }
+  if (spec.topic === "fillBlank") {
+    const board = fillBlankBoards.find((b) => b.id === spec.id);
+    const blanked = board.players[spec.blankIndex];
+    return {
+      ...board,
+      blankIndex: spec.blankIndex,
+      answerId: blanked.playerId,
+      answerName: blanked.name,
+      pos: blanked.pos,
+      team: blanked.team,
+    };
+  }
+  return poolForTopic(spec.topic).find((q) => q.id === spec.id);
+}
+
+function encodeReplayCode(specs, difficulty) {
+  const json = JSON.stringify({ d: difficulty, q: specs });
+  return btoa(encodeURIComponent(json)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeReplayCode(code) {
+  try {
+    const b64 = code.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = JSON.parse(decodeURIComponent(atob(b64)));
+    if (!payload || !Array.isArray(payload.q) || payload.q.length === 0) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 const WIN_MULTIPLIER = { 0: 3, 1: 2, 2: 1 };
@@ -738,6 +798,7 @@ function screenWheel() {
 
   card.innerHTML = `
     <h2 class="screen-title">Spin for your topic</h2>
+    ${state.isReplay ? `<p class="tagline">🎯 Playing a friend's exact quiz</p>` : ""}
     <div class="wheel-stage">
       <div class="wheel-pointer"></div>
       <div class="wheel" id="wheel" style="background: conic-gradient(${gradientStops}); transform: rotate(${state.wheelRotation}deg);">
@@ -764,7 +825,9 @@ function screenWheel() {
 
   spinBtn.addEventListener("click", () => {
     spinBtn.disabled = true;
-    const topic = TOPIC_ORDER[Math.floor(Math.random() * TOPIC_ORDER.length)];
+    const topic = state.isReplay
+      ? state.replayQueue[state.round].topic
+      : TOPIC_ORDER[Math.floor(Math.random() * TOPIC_ORDER.length)];
     const matchingIdx = segTopics.map((t, i) => (t === topic ? i : -1)).filter((i) => i >= 0);
     const idx = matchingIdx[Math.floor(Math.random() * matchingIdx.length)];
     const jitter = (Math.random() - 0.5) * (segAngle * 0.6);
@@ -779,7 +842,7 @@ function screenWheel() {
     const WHEEL_SPIN_MS = 4200;
     setTimeout(() => {
       state.current.topic = topic;
-      state.current.question = pickQuestion(topic);
+      state.current.question = state.isReplay ? pickQuestionFromSpec(state.replayQueue[state.round]) : pickQuestion(topic);
       state.current.totSelections = [null, null, null];
       state.current.totSubmitted = false;
       state.current.selectedPlayer = null;
@@ -947,6 +1010,7 @@ function screenQuestion() {
       delta,
       answer: correctAnswerName(topic, q),
       guessed: "(ran out of time)",
+      spec: questionReplaySpec(topic, q),
     });
     stopTimer();
     state.screen = "result";
@@ -1005,6 +1069,7 @@ function screenQuestion() {
       delta,
       answer: correctAnswerName(topic, q),
       guessed: topic === "college" ? state.current.selectedCollege : state.current.selectedPlayer.name,
+      spec: questionReplaySpec(topic, q),
     });
     stopTimer();
     state.screen = "result";
@@ -1209,6 +1274,7 @@ function screenThisOrThat() {
         delta,
         statLabel: q.statLabel,
         correctCount,
+        spec: questionReplaySpec(topic, q),
       });
       stopTimer();
       state.screen = "result";
@@ -1306,6 +1372,7 @@ function screenThisOrThat() {
         delta,
         statLabel: q.statLabel,
         correctCount,
+        spec: questionReplaySpec(topic, q),
       });
       state.screen = "result";
       render();
@@ -1405,6 +1472,29 @@ function screenResult() {
   return card;
 }
 
+// Tries the native share sheet first (covers "post to Twitter/text a
+// friend/etc." in one shot on mobile); falls back to copying the full
+// text+link to the clipboard when Web Share isn't available or is cancelled.
+async function shareContent(text, url, statusEl) {
+  if (navigator.share) {
+    try {
+      await navigator.share({ text, url });
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    statusEl.textContent = "Copied to clipboard!";
+  } catch (e) {
+    statusEl.textContent = "Couldn't share or copy — please copy the link manually.";
+  }
+  setTimeout(() => {
+    statusEl.textContent = "";
+  }, 3000);
+}
+
 function screenEnd() {
   const card = document.createElement("div");
   card.className = "card";
@@ -1427,6 +1517,37 @@ function screenEnd() {
     )
     .join("");
   card.appendChild(history);
+
+  const shareRow = document.createElement("div");
+  shareRow.className = "share-row";
+  shareRow.innerHTML = `
+    <button class="btn btn-ghost" id="shareResultsBtn">Share Results</button>
+    <button class="btn btn-ghost" id="challengeBtn">Challenge a Friend</button>
+  `;
+  card.appendChild(shareRow);
+
+  const shareStatus = document.createElement("div");
+  shareStatus.className = "share-status";
+  card.appendChild(shareStatus);
+
+  const scoreText = `${state.totalScore > 0 ? "+" : ""}${state.totalScore}`;
+  const siteUrl = `${location.origin}${location.pathname}`;
+
+  shareRow.querySelector("#shareResultsBtn").addEventListener("click", () => {
+    const lines = state.history.map(
+      (h) => `${TOPIC_META[h.topic].title}: ${h.delta > 0 ? "+" : ""}${h.delta}`
+    );
+    const text = `My Quizzy score: ${scoreText}\n${lines.join("\n")}`;
+    shareContent(text, siteUrl, shareStatus);
+  });
+
+  shareRow.querySelector("#challengeBtn").addEventListener("click", () => {
+    const specs = state.history.map((h) => h.spec);
+    const code = encodeReplayCode(specs, state.difficulty);
+    const url = `${siteUrl}?g=${code}`;
+    const text = `I scored ${scoreText} on this Quizzy quiz. Take the same one and see if you can top my score.`;
+    shareContent(text, url, shareStatus);
+  });
 
   const again = document.createElement("button");
   again.className = "btn btn-primary btn-lg";
@@ -1468,4 +1589,18 @@ async function loadData() {
   teammatesQuestions = tm;
 }
 
+function applyReplayFromURL() {
+  const code = new URLSearchParams(location.search).get("g");
+  if (!code) return;
+  const payload = decodeReplayCode(code);
+  if (!payload) return;
+  state.isReplay = true;
+  state.replayQueue = payload.q;
+  state.difficulty = payload.d;
+  state.gameLength = payload.q.length;
+  state.showWelcome = false;
+  state.screen = "wheel";
+}
+
+applyReplayFromURL();
 loadData().then(render);

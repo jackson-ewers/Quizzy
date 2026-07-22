@@ -656,6 +656,22 @@ button {
 .round-row .rr-topic { color: var(--text-secondary); flex: 1; text-align: left; }
 .round-row .rr-delta { font-weight: 700; }
 
+.share-row {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.share-row .btn { flex: 1 1 160px; }
+.share-status {
+  min-height: 18px;
+  font-size: 13px;
+  color: var(--accent-2);
+  font-weight: 600;
+  text-align: center;
+}
+
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
 
