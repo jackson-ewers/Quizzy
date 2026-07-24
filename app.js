@@ -947,6 +947,15 @@ const TOPIC_PICKER_CHIP_HEIGHT = 64;
 const TOPIC_PICKER_REPEATS = 10;
 const TOPIC_PICKER_EXTRA_CYCLES = 6;
 
+// If anything re-renders the app mid-spin (e.g. tapping How to Play), the
+// wheel screen gets rebuilt with a fresh, re-enabled Spin button - but the
+// in-flight spin's pending setTimeouts aren't tied to that old DOM and keep
+// running regardless. Without a guard, a second spin plus the first spin's
+// stale completion could both land, with whichever fires last silently
+// overwriting the topic/screen the other one set. Each spin gets its own
+// token so a stale spin's callbacks become no-ops once superseded.
+let activeSpinToken = 0;
+
 function screenWheel() {
   const card = document.createElement("div");
   card.className = "card";
@@ -978,6 +987,8 @@ function screenWheel() {
 
   spinBtn.addEventListener("click", () => {
     spinBtn.disabled = true;
+    activeSpinToken += 1;
+    const mySpinToken = activeSpinToken;
     const topic = state.isReplay
       ? state.replayQueue[state.round].t
       : TOPIC_ORDER[Math.floor(Math.random() * TOPIC_ORDER.length)];
@@ -997,6 +1008,7 @@ function screenWheel() {
 
     const SPIN_MS = 4200;
     setTimeout(() => {
+      if (mySpinToken !== activeSpinToken) return; // superseded by a later spin - ignore
       state.current.topic = topic;
       state.current.question = state.isReplay ? pickQuestionFromSpec(state.replayQueue[state.round]) : pickQuestion(topic);
       state.current.totSelections = [null, null, null];
@@ -1008,6 +1020,7 @@ function screenWheel() {
       resultEl.textContent = `${TOPIC_META[topic].title}!`;
       resultEl.style.color = TOPIC_META[topic].color;
       setTimeout(() => {
+        if (mySpinToken !== activeSpinToken) return;
         state.screen = "wager";
         render();
       }, 700);
