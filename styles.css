@@ -14,6 +14,7 @@
   --accent-7: #0891b2;
   --accent-8: #92400e;
   --accent-9: #dc2626;
+  --accent-10: #2563eb;
   --logo-start: #ffc257;
   --logo-mid: #ff8438;
   --logo-end: #d83c1c;
@@ -256,55 +257,58 @@ button {
 .length-num { font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
 .length-label { color: var(--text-secondary); font-size: 14px; }
 
-/* ---------- Wheel ---------- */
-.wheel-stage {
+/* ---------- Topic picker (roulette strip) ---------- */
+.topic-picker-stage {
   position: relative;
-  width: min(380px, 82vw);
-  height: min(380px, 82vw);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 100%;
+  max-width: 380px;
+  height: 280px;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-lg);
+  margin: 0 auto;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
 }
-.wheel-pointer {
+.topic-picker-highlight {
   position: absolute;
-  top: -8px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 0; height: 0;
-  border-left: 18px solid transparent;
-  border-right: 18px solid transparent;
-  border-top: 28px solid var(--text);
-  z-index: 3;
-  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 64px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--accent-2) 10%, transparent);
+  border-top: 2px solid var(--accent-2);
+  border-bottom: 2px solid var(--accent-2);
+  z-index: 2;
+  pointer-events: none;
 }
-.wheel {
-  width: 94%;
-  height: 94%;
-  border-radius: 50%;
-  position: relative;
-  box-shadow: var(--shadow-lg), inset 0 0 0 6px rgba(255,255,255,0.15);
+.topic-picker-strip {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
   transition: transform 4.2s cubic-bezier(0.12, 0.85, 0.13, 1);
 }
-.wheel-hub {
-  position: absolute;
-  top: 50%; left: 50%;
-  width: 72px; height: 72px;
-  transform: translate(-50%, -50%);
-  background: var(--surface-solid);
-  border-radius: 50%;
-  box-shadow: var(--shadow);
-  z-index: 2;
-}
-.wheel-label {
-  position: absolute;
-  width: 90px;
-  transform: translate(-50%, -50%);
+.topic-picker-chip {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 24px;
+  font-size: 17px;
   font-weight: 700;
-  font-size: 15px;
-  line-height: 1.2;
-  color: #fff;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.35);
-  text-align: center;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topic-picker-chip .tp-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .spin-result {
@@ -1031,9 +1035,7 @@ button {
 
   .career-table-wrap, .fill-blank-table { max-height: 220px; }
 
-  .wheel-label { width: 66px; font-size: 11px; line-height: 1.15; }
-  .wheel-hub { width: 54px; height: 54px; }
-
   .timer-display { font-size: 22px; }
-  .wheel-stage { width: min(300px, 78vw); height: min(300px, 78vw); }
+  .topic-picker-stage { height: 240px; }
+  .topic-picker-chip { font-size: 15px; padding: 0 16px; }
 }

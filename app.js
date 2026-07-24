@@ -10,8 +10,9 @@ let fillBlankBoards = [];
 let awardsSeasonQuestions = [];
 let trophyCaseQuestions = [];
 let teammatesQuestions = [];
+let lineupsBoards = [];
 
-const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank", "awardsSeason", "trophyCase", "teammates"];
+const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank", "awardsSeason", "trophyCase", "teammates", "lineups"];
 
 const TOPIC_META = {
   decade: {
@@ -62,6 +63,11 @@ const TOPIC_META = {
     color: "var(--accent-9)",
     description: "You'll see a mystery player's name — guess who they played the most games with as a teammate.",
   },
+  lineups: {
+    title: "Lineups",
+    color: "var(--accent-10)",
+    description: "You'll see a team's most common 5-man lineup from a season, with one player missing — guess who it is.",
+  },
 };
 
 const HINTS = {
@@ -96,6 +102,10 @@ const HINTS = {
   teammates: [
     { key: "pos", label: "Teammate's Position", value: (q) => q.pos },
     { key: "team", label: "Team(s) Together", value: (q) => q.team },
+  ],
+  lineups: [
+    { key: "pos", label: "Position (that season)", value: (q) => q.pos },
+    { key: "stats", label: "Season Averages", value: (q) => `${q.mpg} MPG, ${q.ppg} PPG, ${q.rpg} RPG, ${q.apg} APG` },
   ],
 };
 
@@ -146,6 +156,7 @@ function freshState() {
       awardsSeason: new Set(),
       trophyCase: new Set(),
       teammates: new Set(),
+      lineups: new Set(),
     },
     wheelRotation: 0,
     showHowToPlay: false,
@@ -307,6 +318,37 @@ function pickFillBlankQuestion() {
   };
 }
 
+function pickLineupsQuestion() {
+  const cutoff = cutoffYear();
+  const eligible = lineupsBoards.filter((b) => b.seasonYear >= cutoff);
+
+  const used = state.usedQuestionIds.lineups;
+  let candidates = eligible.filter((b) => !used.has(b.id));
+  if (candidates.length === 0) {
+    used.clear();
+    candidates = eligible;
+  }
+  const board = candidates[Math.floor(Math.random() * candidates.length)];
+  used.add(board.id);
+
+  // only players who logged 1000+ total minutes that season can be the
+  // blanked one - baked in at build time as eligibleBlankIndices
+  const indices = board.eligibleBlankIndices;
+  const blankIndex = indices[Math.floor(Math.random() * indices.length)];
+  const blanked = board.players[blankIndex];
+  return {
+    ...board,
+    blankIndex,
+    answerId: blanked.id,
+    answerName: blanked.name,
+    pos: blanked.pos,
+    mpg: blanked.mpg,
+    ppg: blanked.ppg,
+    rpg: blanked.rpg,
+    apg: blanked.apg,
+  };
+}
+
 function poolForTopic(topic) {
   return {
     decade: decadeQuestions,
@@ -322,6 +364,7 @@ function poolForTopic(topic) {
 function pickQuestion(topic) {
   if (topic === "thisOrThat") return pickThisOrThatQuestion();
   if (topic === "fillBlank") return pickFillBlankQuestion();
+  if (topic === "lineups") return pickLineupsQuestion();
 
   const cutoff = cutoffYear();
   const fullPool = poolForTopic(topic);
@@ -359,7 +402,7 @@ function questionReplaySpec(topic, q) {
   if (topic === "thisOrThat") {
     return { t: topic, s: q.statKey, i: q.pairIndices, f: q.flips.map((f) => (f ? 1 : 0)) };
   }
-  if (topic === "fillBlank") {
+  if (topic === "fillBlank" || topic === "lineups") {
     return { t: topic, i: q.id, b: q.blankIndex };
   }
   return { t: topic, i: q.id };
@@ -394,6 +437,23 @@ function pickQuestionFromSpec(spec) {
         team: blanked.team,
       };
     }
+    if (spec.t === "lineups") {
+      const board = lineupsBoards.find((b) => b.id === spec.i);
+      if (!board) return null;
+      const blanked = board.players[spec.b];
+      if (!blanked) return null;
+      return {
+        ...board,
+        blankIndex: spec.b,
+        answerId: blanked.id,
+        answerName: blanked.name,
+        pos: blanked.pos,
+        mpg: blanked.mpg,
+        ppg: blanked.ppg,
+        rpg: blanked.rpg,
+        apg: blanked.apg,
+      };
+    }
     const pool = poolForTopic(spec.t);
     if (!pool) return null;
     return pool.find((q) => q.id === spec.i) || null;
@@ -413,9 +473,10 @@ function pickQuestionFromSpec(spec) {
 const REPLAY_TOPIC_CODES = {
   decade: "d", playerCareer: "p", thisOrThat: "o", college: "c",
   draft: "r", fillBlank: "f", awardsSeason: "a", trophyCase: "x", teammates: "m",
+  lineups: "l",
 };
 const REPLAY_TOPIC_CODES_REV = Object.fromEntries(Object.entries(REPLAY_TOPIC_CODES).map(([k, v]) => [v, k]));
-const REPLAY_STAT_CODES = { pts: "p", trb: "r", ast: "a", "3p": "3", dd: "d", td: "t" };
+const REPLAY_STAT_CODES = { pts: "p", trb: "r", ast: "a", "3p": "3", dd: "d", td: "t", highPts: "h" };
 const REPLAY_STAT_CODES_REV = Object.fromEntries(Object.entries(REPLAY_STAT_CODES).map(([k, v]) => [v, k]));
 const REPLAY_DIFFICULTY_CODES = { easy: "e", medium: "m", hard: "h" };
 const REPLAY_DIFFICULTY_CODES_REV = Object.fromEntries(Object.entries(REPLAY_DIFFICULTY_CODES).map(([k, v]) => [v, k]));
@@ -427,7 +488,7 @@ function encodeRoundSpec(spec) {
     const fields = spec.i.flatMap((idx, k) => [idx, spec.f[k]]);
     return [tc, sc, ...fields].join(".");
   }
-  if (spec.t === "fillBlank") {
+  if (spec.t === "fillBlank" || spec.t === "lineups") {
     return [tc, spec.i, spec.b].join(".");
   }
   return [tc, spec.i].join(".");
@@ -443,7 +504,7 @@ function parseRoundSpec(str) {
     if (!statKey || nums.length !== 6 || nums.some(Number.isNaN)) return null;
     return { t: topic, s: statKey, i: [nums[0], nums[2], nums[4]], f: [nums[1], nums[3], nums[5]] };
   }
-  if (topic === "fillBlank") {
+  if (topic === "fillBlank" || topic === "lineups") {
     const id = Number(parts[1]);
     const blankIndex = Number(parts[2]);
     if (Number.isNaN(id) || Number.isNaN(blankIndex)) return null;
@@ -542,6 +603,9 @@ function questionText(topic, q) {
   if (topic === "teammates") {
     return `<span class="hl">${q.name}</span> played <span class="hl">${q.sharedGames.toLocaleString()}</span> combined regular-season and playoff games with one teammate more than anyone else in their career. Who was it?`;
   }
+  if (topic === "lineups") {
+    return `The <span class="hl">${q.season}</span> <span class="hl">${q.teamName}</span> played <span class="hl">${q.minutesTogether.toLocaleString()}</span> minutes together as this 5-man lineup — but one name is missing. Who is it?`;
+  }
   return `Here's a mystery player's season-by-season stat line. Who is it?`;
 }
 
@@ -550,12 +614,14 @@ function correctAnswerName(topic, q) {
   if (topic === "college") return q.college;
   if (topic === "fillBlank") return q.answerName;
   if (topic === "teammates") return q.answerName;
+  if (topic === "lineups") return q.answerName;
   return q.name;
 }
 
 function isCorrectGuess(topic, q, selectedId) {
   if (topic === "college") return selectedId === q.college;
   if (topic === "fillBlank") return selectedId === q.answerId;
+  if (topic === "lineups") return selectedId === q.answerId;
   const answerId = topic === "decade" || topic === "teammates" ? q.answerId : q.playerId;
   return selectedId === answerId;
 }
@@ -872,52 +938,41 @@ function screenStart() {
   return card;
 }
 
+// A vertical "roulette strip" of topic chips, scrolled and decelerated to
+// land on the picked topic - replaces the old pie-wheel, which ran out of
+// room once there were this many topics (labels started overlapping). Scales
+// to any number of topics for free, since it's just more rows in a list
+// instead of thinner wedges in a circle.
+const TOPIC_PICKER_CHIP_HEIGHT = 64;
+const TOPIC_PICKER_REPEATS = 10;
+const TOPIC_PICKER_EXTRA_CYCLES = 6;
+
 function screenWheel() {
   const card = document.createElement("div");
   card.className = "card";
 
-  const segTopics = TOPIC_ORDER.slice();
-  const segCount = segTopics.length;
-  const segAngle = 360 / segCount;
-  const segColorHex = {
-    decade: "#ff6b35",
-    playerCareer: "#0071e3",
-    thisOrThat: "#22a06b",
-    college: "#a855f7",
-    draft: "#e0357a",
-    fillBlank: "#f2b705",
-    awardsSeason: "#0891b2",
-    trophyCase: "#92400e",
-    teammates: "#dc2626",
-  };
-  const gradientStops = segTopics
-    .map((t, i) => `${segColorHex[t]} ${i * segAngle}deg ${(i + 1) * segAngle}deg`)
-    .join(", ");
+  const cycleHeight = TOPIC_ORDER.length * TOPIC_PICKER_CHIP_HEIGHT;
+  const stripTopics = Array.from({ length: TOPIC_PICKER_REPEATS }, () => TOPIC_ORDER).flat();
 
   card.innerHTML = `
     <h2 class="screen-title">Spin for your topic</h2>
     ${state.isReplay ? `<p class="tagline">🎯 Playing a friend's exact quiz</p>` : ""}
-    <div class="wheel-stage">
-      <div class="wheel-pointer"></div>
-      <div class="wheel" id="wheel" style="background: conic-gradient(${gradientStops}); transform: rotate(${state.wheelRotation}deg);">
-        ${segTopics
-          .map((t, i) => {
-            const angle = i * segAngle + segAngle / 2;
-            const rad = (angle * Math.PI) / 180;
-            const radius = window.matchMedia("(max-width: 480px)").matches ? 76 : 108;
-            const dx = radius * Math.sin(rad);
-            const dy = -radius * Math.cos(rad);
-            return `<div class="wheel-label" style="left: calc(50% + ${dx}px); top: calc(50% + ${dy}px);">${TOPIC_META[t].title}</div>`;
-          })
+    <div class="topic-picker-stage">
+      <div class="topic-picker-highlight"></div>
+      <div class="topic-picker-strip" id="topicStrip" style="transform: translateY(-${state.wheelRotation}px)">
+        ${stripTopics
+          .map(
+            (t) =>
+              `<div class="topic-picker-chip"><span class="tp-dot" style="background:${TOPIC_META[t].color}"></span>${TOPIC_META[t].title}</div>`
+          )
           .join("")}
-        <div class="wheel-hub"></div>
       </div>
     </div>
     <div class="spin-result" id="spinResult"></div>
-    <button class="btn btn-primary btn-lg" id="spinBtn">Spin the Wheel</button>
+    <button class="btn btn-primary btn-lg" id="spinBtn">Spin for a Topic</button>
   `;
 
-  const wheelEl = card.querySelector("#wheel");
+  const stripEl = card.querySelector("#topicStrip");
   const spinBtn = card.querySelector("#spinBtn");
   const resultEl = card.querySelector("#spinResult");
 
@@ -926,18 +981,21 @@ function screenWheel() {
     const topic = state.isReplay
       ? state.replayQueue[state.round].t
       : TOPIC_ORDER[Math.floor(Math.random() * TOPIC_ORDER.length)];
-    const matchingIdx = segTopics.map((t, i) => (t === topic ? i : -1)).filter((i) => i >= 0);
-    const idx = matchingIdx[Math.floor(Math.random() * matchingIdx.length)];
-    const jitter = (Math.random() - 0.5) * (segAngle * 0.6);
-    const segCenter = idx * segAngle + segAngle / 2 + jitter;
-    const extraSpins = 6 * 360;
-    const targetWithinCircle = (360 - segCenter + 360) % 360;
-    const newRotation = state.wheelRotation - (state.wheelRotation % 360) + extraSpins + targetWithinCircle;
 
-    state.wheelRotation = newRotation;
-    wheelEl.style.transform = `rotate(${newRotation}deg)`;
+    // Always build the next stop from the bounded "position within one loop"
+    // (not the raw offset) so the strip's required height stays constant no
+    // matter how many rounds/spins have happened this game - only the target
+    // position needs to always land ahead of where the strip currently sits.
+    const currentWithinCycle = state.wheelRotation % cycleHeight;
+    const targetIdx = TOPIC_ORDER.indexOf(topic);
+    const jitter = (Math.random() - 0.5) * (TOPIC_PICKER_CHIP_HEIGHT * 0.6);
+    const targetWithinCycle = targetIdx * TOPIC_PICKER_CHIP_HEIGHT + TOPIC_PICKER_CHIP_HEIGHT / 2 + jitter;
+    const newOffset = currentWithinCycle + TOPIC_PICKER_EXTRA_CYCLES * cycleHeight + targetWithinCycle;
 
-    const WHEEL_SPIN_MS = 4200;
+    state.wheelRotation = newOffset;
+    stripEl.style.transform = `translateY(-${newOffset}px)`;
+
+    const SPIN_MS = 4200;
     setTimeout(() => {
       state.current.topic = topic;
       state.current.question = state.isReplay ? pickQuestionFromSpec(state.replayQueue[state.round]) : pickQuestion(topic);
@@ -953,7 +1011,7 @@ function screenWheel() {
         state.screen = "wager";
         render();
       }, 700);
-    }, WHEEL_SPIN_MS);
+    }, SPIN_MS);
   });
 
   return card;
@@ -1132,6 +1190,9 @@ function screenQuestion() {
   if (topic === "fillBlank") {
     card.appendChild(renderFillBlankBoard(q));
   }
+  if (topic === "lineups") {
+    card.appendChild(renderLineupsBoard(q));
+  }
 
   const reminder = document.createElement("div");
   reminder.className = "wager-reminder";
@@ -1232,6 +1293,27 @@ function renderFillBlankBoard(q) {
   wrap.innerHTML = `
     <table class="career-table fill-blank-table">
       <thead><tr>${headCells}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  return wrap;
+}
+
+function renderLineupsBoard(q) {
+  const wrap = document.createElement("div");
+  wrap.className = "career-table-wrap fill-blank-wrap";
+
+  const rows = q.players
+    .map((p, i) => {
+      const isBlank = i === q.blankIndex;
+      const nameCell = isBlank ? `<span class="fb-blank">???</span>` : p.name;
+      return `<tr${isBlank ? ' class="fb-blank-row"' : ""}><td>${i + 1}</td><td>${nameCell}</td></tr>`;
+    })
+    .join("");
+
+  wrap.innerHTML = `
+    <table class="career-table fill-blank-table">
+      <thead><tr><th>#</th><th>Player</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
@@ -1666,7 +1748,7 @@ function screenEnd() {
 
 // ---------- Boot ----------
 async function loadData() {
-  const [d, pc, tot, cq, cs, dq, p, fb, as, tc, tm] = await Promise.all([
+  const [d, pc, tot, cq, cs, dq, p, fb, as, tc, tm, lu] = await Promise.all([
     fetch("data/decade_questions.json").then((r) => r.json()),
     fetch("data/player_career_questions.json").then((r) => r.json()),
     fetch("data/this_or_that_pool.json").then((r) => r.json()),
@@ -1678,6 +1760,7 @@ async function loadData() {
     fetch("data/awards_season_questions.json").then((r) => r.json()),
     fetch("data/trophy_case_questions.json").then((r) => r.json()),
     fetch("data/teammates_questions.json").then((r) => r.json()),
+    fetch("data/lineups_boards.json").then((r) => r.json()),
   ]);
   decadeQuestions = d;
   playerCareerQuestions = pc;
@@ -1690,6 +1773,7 @@ async function loadData() {
   awardsSeasonQuestions = as;
   trophyCaseQuestions = tc;
   teammatesQuestions = tm;
+  lineupsBoards = lu;
 }
 
 function readReplayCodeFromURL() {

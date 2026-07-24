@@ -13,6 +13,7 @@ Outputs (into ./data/):
   - trophy_case_questions.json "Trophy Case" question pool (guess the player from their career accolade resume)
   - fill_blank_boards.json    "Fill in the Blank" top-5 stat leaderboards
   - teammates_questions.json  "Teammates" question pool (guess a player's most-played-with teammate)
+  - lineups_boards.json       "Lineups" question pool (guess the missing player from a team's most common 5-man lineup)
 """
 import csv
 import json
@@ -882,6 +883,82 @@ def main():
     with open(OUT / "teammates_questions.json", "w", encoding="utf-8") as f:
         json.dump(teammates_questions, f, ensure_ascii=False)
     print(f"teammates_questions.json: {len(teammates_questions)} questions")
+
+    # ---- lineups_boards.json ----
+    # Guess the missing player from a team's most common 5-man lineup for a
+    # given season (manually collected into most_common_5_man_lineups.csv,
+    # since basketball-reference's /lineups/ pages are robots.txt-disallowed
+    # for automated pulls - see that file for how it was gathered). Only
+    # lineups that logged 200+ minutes together qualify, and only players who
+    # played 1000+ total minutes that season are eligible to be the blanked
+    # one - a lineup's role players (e.g. four 500-minute bench guys next to
+    # one 1000-minute starter) shouldn't be the answer, since there's no real
+    # season stat line to hint at. The client picks a random eligible index
+    # at runtime, same pattern as Fill in the Blank.
+    LINEUPS_CSV = BASE / "most_common_5_man_lineups.csv"
+    MIN_LINEUP_MINUTES = 200
+    MIN_SEASON_MINUTES_FOR_BLANK = 1000
+
+    def parse_lineup_minutes(mp_str):
+        minutes, seconds = mp_str.split(":")
+        return int(minutes) + int(seconds) / 60
+
+    lineups_boards = []
+    bid = 0
+    with open(LINEUPS_CSV, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            lineup_minutes = parse_lineup_minutes(row["MP"])
+            if lineup_minutes < MIN_LINEUP_MINUTES:
+                continue
+            team_abbr = row["TEAM"].strip()
+            if team_abbr not in team_names:
+                continue
+            season = row["SEASON"].strip()
+            player_ids = [row[f"PLAYER_{i}_ID"].strip() for i in range(1, 6)]
+
+            players_out = []
+            valid = True
+            for pid in player_ids:
+                p = players.get(pid)
+                if not p:
+                    valid = False
+                    break
+                entry = {"id": pid, "name": p["name"]}
+                s = season_totals.get((pid, season))
+                if s and s["g"]:
+                    entry["pos"] = "-".join(s["positions"]) or (p["pos"] or "")
+                    entry["mpg"] = round(s["mp"] / s["g"], 1) if s["mpTracked"] else None
+                    entry["ppg"] = round(s["pts"] / s["g"], 1)
+                    entry["rpg"] = round(s["trb"] / s["g"], 1) if s["trbTracked"] else None
+                    entry["apg"] = round(s["ast"] / s["g"], 1)
+                    entry["seasonMin"] = round(s["mp"])
+                players_out.append(entry)
+            if not valid:
+                continue
+
+            eligible_blank_indices = [
+                i for i, p in enumerate(players_out)
+                if p.get("seasonMin") is not None and p["seasonMin"] >= MIN_SEASON_MINUTES_FOR_BLANK
+            ]
+            if not eligible_blank_indices:
+                continue
+
+            bid += 1
+            lineups_boards.append(
+                {
+                    "id": bid,
+                    "teamAbbr": team_abbr,
+                    "teamName": team_names[team_abbr],
+                    "season": season,
+                    "seasonYear": int(season.split("-")[0]),
+                    "minutesTogether": round(lineup_minutes),
+                    "players": players_out,
+                    "eligibleBlankIndices": eligible_blank_indices,
+                }
+            )
+    with open(OUT / "lineups_boards.json", "w", encoding="utf-8") as f:
+        json.dump(lineups_boards, f, ensure_ascii=False)
+    print(f"lineups_boards.json: {len(lineups_boards)} boards")
 
     # ---- fill_blank_boards.json ----
     # Top-5 stat leaderboards, one of 4 formats (the client splits its random pick
