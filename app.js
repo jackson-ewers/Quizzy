@@ -158,7 +158,6 @@ function freshState() {
       teammates: new Set(),
       lineups: new Set(),
     },
-    wheelRotation: 0,
     showHowToPlay: false,
     showWelcome: false,
     showPrivacyPolicy: false,
@@ -938,50 +937,43 @@ function screenStart() {
   return card;
 }
 
-// A vertical "roulette strip" of topic chips, scrolled and decelerated to
-// land on the picked topic - replaces the old pie-wheel, which ran out of
-// room once there were this many topics (labels started overlapping). Scales
-// to any number of topics for free, since it's just more rows in a list
-// instead of thinner wedges in a circle.
-const TOPIC_PICKER_CHIP_HEIGHT = 64;
-const TOPIC_PICKER_REPEATS = 10;
-const TOPIC_PICKER_EXTRA_CYCLES = 6;
+// Every topic sits visibly in a grid, and a highlight hops between cards -
+// fast at first, slowing down - before settling on the randomly picked one.
+// Replaces both the old pie-wheel (labels overlapped once there were this
+// many topics) and a scrolling strip (most topics were hidden off-screen at
+// any moment) - a grid shows every topic at once and scales to any count by
+// just adding more cells, no geometry to redo.
+const TOPIC_PICKER_LOOPS = 3;
+const TOPIC_PICKER_MIN_DELAY = 55;
+const TOPIC_PICKER_MAX_DELAY = 420;
 
-// If anything re-renders the app mid-spin (e.g. tapping How to Play), the
-// wheel screen gets rebuilt with a fresh, re-enabled Spin button - but the
-// in-flight spin's pending setTimeouts aren't tied to that old DOM and keep
-// running regardless. Without a guard, a second spin plus the first spin's
+// If anything re-renders the app mid-pick (e.g. tapping How to Play), the
+// wheel screen gets rebuilt with a fresh, re-enabled button - but the
+// in-flight pick's pending setTimeouts aren't tied to that old DOM and keep
+// running regardless. Without a guard, a second pick plus the first pick's
 // stale completion could both land, with whichever fires last silently
-// overwriting the topic/screen the other one set. Each spin gets its own
-// token so a stale spin's callbacks become no-ops once superseded.
+// overwriting the topic/screen the other one set. Each pick gets its own
+// token so a stale pick's callbacks become no-ops once superseded.
 let activeSpinToken = 0;
 
 function screenWheel() {
   const card = document.createElement("div");
   card.className = "card";
 
-  const cycleHeight = TOPIC_ORDER.length * TOPIC_PICKER_CHIP_HEIGHT;
-  const stripTopics = Array.from({ length: TOPIC_PICKER_REPEATS }, () => TOPIC_ORDER).flat();
-
   card.innerHTML = `
-    <h2 class="screen-title">Spin for your topic</h2>
+    <h2 class="screen-title">Pick a random topic</h2>
     ${state.isReplay ? `<p class="tagline">🎯 Playing a friend's exact quiz</p>` : ""}
-    <div class="topic-picker-stage">
-      <div class="topic-picker-highlight"></div>
-      <div class="topic-picker-strip" id="topicStrip" style="transform: translateY(-${state.wheelRotation}px)">
-        ${stripTopics
-          .map(
-            (t) =>
-              `<div class="topic-picker-chip"><span class="tp-dot" style="background:${TOPIC_META[t].color}"></span>${TOPIC_META[t].title}</div>`
-          )
-          .join("")}
-      </div>
+    <div class="topic-grid" id="topicGrid">
+      ${TOPIC_ORDER.map(
+        (t) =>
+          `<div class="topic-grid-card"><span class="tp-dot" style="background:${TOPIC_META[t].color}"></span>${TOPIC_META[t].title}</div>`
+      ).join("")}
     </div>
     <div class="spin-result" id="spinResult"></div>
-    <button class="btn btn-primary btn-lg" id="spinBtn">Spin for a Topic</button>
+    <button class="btn btn-primary btn-lg" id="spinBtn">Pick My Topic</button>
   `;
 
-  const stripEl = card.querySelector("#topicStrip");
+  const cardEls = [...card.querySelectorAll(".topic-grid-card")];
   const spinBtn = card.querySelector("#spinBtn");
   const resultEl = card.querySelector("#spinResult");
 
@@ -993,22 +985,56 @@ function screenWheel() {
       ? state.replayQueue[state.round].t
       : TOPIC_ORDER[Math.floor(Math.random() * TOPIC_ORDER.length)];
 
-    // Always build the next stop from the bounded "position within one loop"
-    // (not the raw offset) so the strip's required height stays constant no
-    // matter how many rounds/spins have happened this game - only the target
-    // position needs to always land ahead of where the strip currently sits.
-    const currentWithinCycle = state.wheelRotation % cycleHeight;
+    const count = TOPIC_ORDER.length;
     const targetIdx = TOPIC_ORDER.indexOf(topic);
-    const jitter = (Math.random() - 0.5) * (TOPIC_PICKER_CHIP_HEIGHT * 0.6);
-    const targetWithinCycle = targetIdx * TOPIC_PICKER_CHIP_HEIGHT + TOPIC_PICKER_CHIP_HEIGHT / 2 + jitter;
-    const newOffset = currentWithinCycle + TOPIC_PICKER_EXTRA_CYCLES * cycleHeight + targetWithinCycle;
+    const finalHop = TOPIC_PICKER_LOOPS * count + targetIdx;
 
-    state.wheelRotation = newOffset;
-    stripEl.style.transform = `translateY(-${newOffset}px)`;
+    // Precompute each hop's start time against the same escalating-delay
+    // curve, then drive the animation off real elapsed time on a fixed
+    // check-in cadence, rather than one setTimeout per hop with its own
+    // individually-computed delay. A long chain of differently-timed
+    // setTimeouts is fragile under a browser's background-tab timer
+    // throttling (each call can get clamped/delayed independently, and that
+    // overhead compounds over dozens of hops); recomputing which hop should
+    // be showing from real elapsed time each check-in means a late tick just
+    // catches up to wherever the animation should be, rather than falling
+    // further behind. (requestAnimationFrame would be smoother, but it's
+    // fully paused - not just throttled - whenever the tab is hidden, which
+    // would stall the pick indefinitely instead of just running slower.)
+    const TICK_MS = 50;
+    const hopStart = [0];
+    for (let h = 1; h <= finalHop; h++) {
+      const progress = (h - 1) / finalHop;
+      const delay = TOPIC_PICKER_MIN_DELAY + (TOPIC_PICKER_MAX_DELAY - TOPIC_PICKER_MIN_DELAY) * progress ** 3;
+      hopStart.push(hopStart[h - 1] + delay);
+    }
 
-    const SPIN_MS = 4200;
-    setTimeout(() => {
-      if (mySpinToken !== activeSpinToken) return; // superseded by a later spin - ignore
+    const startTime = performance.now();
+    let lastHighlighted = null;
+    let lastHopShown = -1;
+
+    function tick() {
+      if (mySpinToken !== activeSpinToken) return;
+      const elapsed = performance.now() - startTime;
+      let hop = lastHopShown;
+      while (hop < finalHop && hopStart[hop + 1] <= elapsed) hop++;
+
+      if (hop !== lastHopShown) {
+        if (lastHighlighted) lastHighlighted.classList.remove("tp-highlight");
+        const el = cardEls[hop % count];
+        el.classList.add(hop === finalHop ? "tp-selected" : "tp-highlight");
+        lastHighlighted = el;
+        lastHopShown = hop;
+      }
+
+      if (hop >= finalHop) {
+        finishPick();
+        return;
+      }
+      setTimeout(tick, TICK_MS);
+    }
+
+    function finishPick() {
       state.current.topic = topic;
       state.current.question = state.isReplay ? pickQuestionFromSpec(state.replayQueue[state.round]) : pickQuestion(topic);
       state.current.totSelections = [null, null, null];
@@ -1024,7 +1050,9 @@ function screenWheel() {
         state.screen = "wager";
         render();
       }, 700);
-    }, SPIN_MS);
+    }
+
+    tick();
   });
 
   return card;
