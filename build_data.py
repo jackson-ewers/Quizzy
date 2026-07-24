@@ -14,6 +14,7 @@ Outputs (into ./data/):
   - fill_blank_boards.json    "Fill in the Blank" top-5 stat leaderboards
   - teammates_questions.json  "Teammates" question pool (guess a player's most-played-with teammate)
   - lineups_boards.json       "Lineups" question pool (guess the missing player from a team's most common 5-man lineup)
+  - jersey_numbers_questions.json "Jersey Numbers" question pool (guess the number a player wore for a specific team)
 """
 import csv
 import json
@@ -959,6 +960,63 @@ def main():
     with open(OUT / "lineups_boards.json", "w", encoding="utf-8") as f:
         json.dump(lineups_boards, f, ensure_ascii=False)
     print(f"lineups_boards.json: {len(lineups_boards)} boards")
+
+    # ---- jersey_numbers_questions.json ----
+    # Guess the number a player wore for a specific team. Only a (player,
+    # team) pairing where the player wore exactly one number for that team
+    # qualifies - checked across every stint with that team combined (e.g.
+    # LeBron's two separate Cleveland stints, 2004-2010 and 2015-2018, both
+    # wore #23, so that still counts as "one number" even though it's two
+    # rows in the source data) - and only if the player received at least
+    # one MVP vote (an "MVP-N" entry in that season's awards text, for any
+    # N - only players who received real ballot votes get ranked at all)
+    # during an actual season they were on that team.
+    JERSEY_CSV = BASE / "player_jersey_numbers.csv"
+    NORMAL_JERSEY_YEARS_RE = re.compile(r"^\d{4}(-\d{4})?$")
+
+    jersey_stints_by_player_team = defaultdict(list)  # (pid, team) -> [(number, y_start, y_end), ...]
+    with open(JERSEY_CSV, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            years = row["years"].strip()
+            if not NORMAL_JERSEY_YEARS_RE.match(years):
+                continue  # skip one-off special-occasion numbers (tribute nights, lost jerseys, etc.)
+            parts = years.split("-")
+            y_start = int(parts[0])
+            y_end = int(parts[1]) if len(parts) > 1 else y_start
+            jersey_stints_by_player_team[(row["player_id"], row["team"].strip())].append(
+                (int(row["number"]), y_start, y_end)
+            )
+
+    jersey_numbers_questions = []
+    qid = 0
+    for (pid, team), stints in jersey_stints_by_player_team.items():
+        distinct_numbers = {n for n, _, _ in stints}
+        if len(distinct_numbers) != 1:
+            continue
+        p = players.get(pid)
+        if not p:
+            continue
+        seasons = set()
+        for _, y_start, y_end in stints:
+            for y in range(y_start, y_end + 1):
+                seasons.add(f"{y - 1}-{y % 100:02d}")
+        has_mvp_vote = any("MVP-" in awards_by_season.get((pid, s), "") for s in seasons)
+        if not has_mvp_vote:
+            continue
+        qid += 1
+        jersey_numbers_questions.append(
+            {
+                "id": qid,
+                "playerId": pid,
+                "name": p["name"],
+                "team": team,
+                "answerNumber": next(iter(distinct_numbers)),
+                "fromYear": min(y_start for _, y_start, _ in stints),
+            }
+        )
+    with open(OUT / "jersey_numbers_questions.json", "w", encoding="utf-8") as f:
+        json.dump(jersey_numbers_questions, f, ensure_ascii=False)
+    print(f"jersey_numbers_questions.json: {len(jersey_numbers_questions)} questions")
 
     # ---- fill_blank_boards.json ----
     # Top-5 stat leaderboards, one of 4 formats (the client splits its random pick

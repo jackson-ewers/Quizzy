@@ -11,8 +11,9 @@ let awardsSeasonQuestions = [];
 let trophyCaseQuestions = [];
 let teammatesQuestions = [];
 let lineupsBoards = [];
+let jerseyNumbersQuestions = [];
 
-const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank", "awardsSeason", "trophyCase", "teammates", "lineups"];
+const TOPIC_ORDER = ["decade", "playerCareer", "thisOrThat", "college", "draft", "fillBlank", "awardsSeason", "trophyCase", "teammates", "lineups", "jerseyNumbers"];
 
 const TOPIC_META = {
   decade: {
@@ -68,6 +69,11 @@ const TOPIC_META = {
     color: "var(--accent-10)",
     description: "You'll see a team's most common 5-man lineup from a season, with one player missing — guess who it is.",
   },
+  jerseyNumbers: {
+    title: "Jersey Numbers",
+    color: "var(--accent-11)",
+    description: "You'll get a player and a team they played for — guess the number they wore.",
+  },
 };
 
 const HINTS = {
@@ -106,6 +112,10 @@ const HINTS = {
   lineups: [
     { key: "pos", label: "Position (that season)", value: (q) => q.pos },
     { key: "stats", label: "Season Averages", value: (q) => `${q.mpg} MPG, ${q.ppg} PPG, ${q.rpg} RPG, ${q.apg} APG` },
+  ],
+  jerseyNumbers: [
+    { key: "parity", label: "Odd or Even", value: (q) => (q.answerNumber % 2 === 0 ? "Even" : "Odd") },
+    { key: "overUnder", label: "Over/Under", value: (q) => q.overUnderHint },
   ],
 };
 
@@ -157,6 +167,7 @@ function freshState() {
       trophyCase: new Set(),
       teammates: new Set(),
       lineups: new Set(),
+      jerseyNumbers: new Set(),
     },
     wheelRotation: 0,
     showHowToPlay: false,
@@ -174,6 +185,7 @@ function freshState() {
       pendingHint: null,
       selectedPlayer: null,
       selectedCollege: null,
+      selectedNumber: null,
       totSelections: [null, null, null],
       totSubmitted: false,
     },
@@ -349,6 +361,40 @@ function pickLineupsQuestion() {
   };
 }
 
+// Adds an "over/under" hint value to a Jersey Numbers question, computed
+// fresh each time the question is picked (not baked in at build time) so the
+// same question can show a different threshold on a future replay. The
+// threshold sits 4-8 away from the real number - close enough to actually
+// narrow things down, far enough that it doesn't just give the number away -
+// and always lands on the side of the answer that keeps 0-99 in bounds.
+function addJerseyOverUnderHint(q) {
+  const offset = 4 + Math.floor(Math.random() * 5);
+  const canGoAbove = q.answerNumber < 99;
+  const canGoBelow = q.answerNumber > 0;
+  let goAbove = Math.random() < 0.5;
+  if (goAbove && !canGoAbove) goAbove = false;
+  if (!goAbove && !canGoBelow) goAbove = true;
+  const overUnderHint = goAbove
+    ? `Under ${Math.min(99, q.answerNumber + offset)}`
+    : `Over ${Math.max(0, q.answerNumber - offset)}`;
+  return { ...q, overUnderHint };
+}
+
+function pickJerseyNumbersQuestion() {
+  const cutoff = cutoffYear();
+  const pool = jerseyNumbersQuestions.filter((q) => q.fromYear >= cutoff);
+
+  const used = state.usedQuestionIds.jerseyNumbers;
+  let candidates = pool.filter((q) => !used.has(q.id));
+  if (candidates.length === 0) {
+    used.clear();
+    candidates = pool;
+  }
+  const q = candidates[Math.floor(Math.random() * candidates.length)];
+  used.add(q.id);
+  return addJerseyOverUnderHint(q);
+}
+
 function poolForTopic(topic) {
   return {
     decade: decadeQuestions,
@@ -365,6 +411,7 @@ function pickQuestion(topic) {
   if (topic === "thisOrThat") return pickThisOrThatQuestion();
   if (topic === "fillBlank") return pickFillBlankQuestion();
   if (topic === "lineups") return pickLineupsQuestion();
+  if (topic === "jerseyNumbers") return pickJerseyNumbersQuestion();
 
   const cutoff = cutoffYear();
   const fullPool = poolForTopic(topic);
@@ -454,6 +501,10 @@ function pickQuestionFromSpec(spec) {
         apg: blanked.apg,
       };
     }
+    if (spec.t === "jerseyNumbers") {
+      const q = jerseyNumbersQuestions.find((q) => q.id === spec.i);
+      return q ? addJerseyOverUnderHint(q) : null;
+    }
     const pool = poolForTopic(spec.t);
     if (!pool) return null;
     return pool.find((q) => q.id === spec.i) || null;
@@ -473,7 +524,7 @@ function pickQuestionFromSpec(spec) {
 const REPLAY_TOPIC_CODES = {
   decade: "d", playerCareer: "p", thisOrThat: "o", college: "c",
   draft: "r", fillBlank: "f", awardsSeason: "a", trophyCase: "x", teammates: "m",
-  lineups: "l",
+  lineups: "l", jerseyNumbers: "j",
 };
 const REPLAY_TOPIC_CODES_REV = Object.fromEntries(Object.entries(REPLAY_TOPIC_CODES).map(([k, v]) => [v, k]));
 const REPLAY_STAT_CODES = { pts: "p", trb: "r", ast: "a", "3p": "3", dd: "d", td: "t", highPts: "h" };
@@ -606,6 +657,9 @@ function questionText(topic, q) {
   if (topic === "lineups") {
     return `The <span class="hl">${q.season}</span> <span class="hl">${q.teamName}</span> played <span class="hl">${q.minutesTogether.toLocaleString()}</span> minutes together as this 5-man lineup — but one name is missing. Who is it?`;
   }
+  if (topic === "jerseyNumbers") {
+    return `What jersey number did <span class="hl">${q.name}</span> wear for the <span class="hl">${q.team}</span>?`;
+  }
   return `Here's a mystery player's season-by-season stat line. Who is it?`;
 }
 
@@ -615,6 +669,7 @@ function correctAnswerName(topic, q) {
   if (topic === "fillBlank") return q.answerName;
   if (topic === "teammates") return q.answerName;
   if (topic === "lineups") return q.answerName;
+  if (topic === "jerseyNumbers") return String(q.answerNumber);
   return q.name;
 }
 
@@ -622,6 +677,7 @@ function isCorrectGuess(topic, q, selectedId) {
   if (topic === "college") return selectedId === q.college;
   if (topic === "fillBlank") return selectedId === q.answerId;
   if (topic === "lineups") return selectedId === q.answerId;
+  if (topic === "jerseyNumbers") return Number(selectedId) === q.answerNumber;
   const answerId = topic === "decade" || topic === "teammates" ? q.answerId : q.playerId;
   return selectedId === answerId;
 }
@@ -973,6 +1029,7 @@ function screenWheel() {
     trophyCase: "#92400e",
     teammates: "#dc2626",
     lineups: "#2563eb",
+    jerseyNumbers: "#059669",
   };
   const gradientStops = segTopics
     .map((t, i) => `${segColorHex[t]} ${i * segAngle}deg ${(i + 1) * segAngle}deg`)
@@ -1045,6 +1102,7 @@ function screenWheel() {
       state.current.totSubmitted = false;
       state.current.selectedPlayer = null;
       state.current.selectedCollege = null;
+      state.current.selectedNumber = null;
       state.current.hintsRevealed = [];
       state.current.pendingHint = null;
       resultEl.textContent = `${TOPIC_META[topic].title}!`;
@@ -1251,15 +1309,34 @@ function screenQuestion() {
   stakes.innerHTML = renderStakesTable(state.current.wager, hintCount);
   card.appendChild(stakes);
 
-  card.appendChild(topic === "college" ? renderCollegeSearch() : renderPlayerSearch());
-
   const submitBtn = document.createElement("button");
   submitBtn.className = "btn btn-primary btn-lg";
   submitBtn.textContent = "Submit Guess";
-  const selectedAnswer = topic === "college" ? state.current.selectedCollege : state.current.selectedPlayer;
+
+  const answerWidget =
+    topic === "college"
+      ? renderCollegeSearch()
+      : topic === "jerseyNumbers"
+      ? renderNumberInput((isValid) => {
+          submitBtn.disabled = !isValid;
+        })
+      : renderPlayerSearch();
+  card.appendChild(answerWidget);
+
+  const selectedAnswer =
+    topic === "college"
+      ? state.current.selectedCollege
+      : topic === "jerseyNumbers"
+      ? state.current.selectedNumber
+      : state.current.selectedPlayer;
   submitBtn.disabled = !selectedAnswer;
   submitBtn.addEventListener("click", () => {
-    const guessed = topic === "college" ? state.current.selectedCollege : state.current.selectedPlayer.id;
+    const guessed =
+      topic === "college"
+        ? state.current.selectedCollege
+        : topic === "jerseyNumbers"
+        ? state.current.selectedNumber
+        : state.current.selectedPlayer.id;
     const correct = isCorrectGuess(topic, q, guessed);
     const delta = computePayout(state.current.wager, hintCount, correct);
     state.totalScore += delta;
@@ -1270,7 +1347,12 @@ function screenQuestion() {
       correct,
       delta,
       answer: correctAnswerName(topic, q),
-      guessed: topic === "college" ? state.current.selectedCollege : state.current.selectedPlayer.name,
+      guessed:
+        topic === "college"
+          ? state.current.selectedCollege
+          : topic === "jerseyNumbers"
+          ? state.current.selectedNumber
+          : state.current.selectedPlayer.name,
       spec: questionReplaySpec(topic, q),
     });
     stopTimer();
@@ -1412,6 +1494,28 @@ function renderPlayerSearch() {
         render();
       });
     });
+  });
+
+  return wrap;
+}
+
+// Jersey Numbers guesses a plain number instead of searching for a player -
+// onValidityChange lets the caller toggle the Submit button directly rather
+// than calling render() on every keystroke, which would rebuild the input
+// from scratch and kick focus out after every digit typed.
+function renderNumberInput(onValidityChange) {
+  const wrap = document.createElement("div");
+  wrap.className = "search-wrap";
+  wrap.innerHTML = `<input type="number" inputmode="numeric" min="0" max="99" class="search-input" id="numberGuessInput" placeholder="Enter jersey number (0-99)" autocomplete="off" />`;
+
+  const input = wrap.querySelector("#numberGuessInput");
+  if (state.current.selectedNumber !== null) input.value = state.current.selectedNumber;
+
+  input.addEventListener("input", () => {
+    const raw = input.value.trim();
+    const isValid = raw !== "" && /^\d{1,2}$/.test(raw) && Number(raw) >= 0 && Number(raw) <= 99;
+    state.current.selectedNumber = isValid ? raw : null;
+    onValidityChange(isValid);
   });
 
   return wrap;
@@ -1684,6 +1788,7 @@ function screenResult() {
       pendingHint: null,
       selectedPlayer: null,
       selectedCollege: null,
+      selectedNumber: null,
       totSelections: [null, null, null],
       totSubmitted: false,
     };
@@ -1791,7 +1896,7 @@ function screenEnd() {
 
 // ---------- Boot ----------
 async function loadData() {
-  const [d, pc, tot, cq, cs, dq, p, fb, as, tc, tm, lu] = await Promise.all([
+  const [d, pc, tot, cq, cs, dq, p, fb, as, tc, tm, lu, jn] = await Promise.all([
     fetch("data/decade_questions.json").then((r) => r.json()),
     fetch("data/player_career_questions.json").then((r) => r.json()),
     fetch("data/this_or_that_pool.json").then((r) => r.json()),
@@ -1804,6 +1909,7 @@ async function loadData() {
     fetch("data/trophy_case_questions.json").then((r) => r.json()),
     fetch("data/teammates_questions.json").then((r) => r.json()),
     fetch("data/lineups_boards.json").then((r) => r.json()),
+    fetch("data/jersey_numbers_questions.json").then((r) => r.json()),
   ]);
   decadeQuestions = d;
   playerCareerQuestions = pc;
@@ -1817,6 +1923,7 @@ async function loadData() {
   trophyCaseQuestions = tc;
   teammatesQuestions = tm;
   lineupsBoards = lu;
+  jerseyNumbersQuestions = jn;
 }
 
 function readReplayCodeFromURL() {
