@@ -73,10 +73,6 @@ const HINTS = {
     { key: "pos", label: "Position (per season)" },
     { key: "awards", label: "Awards (per season)" },
   ],
-  thisOrThat: [
-    { key: "g", label: "Career Games Played" },
-    { key: "mpg", label: "Career Minutes Per Game" },
-  ],
   college: [
     { key: "conference", label: "Conference", value: (q) => q.conference },
     { key: "mascot", label: "Mascot", value: (q) => q.mascot },
@@ -102,6 +98,25 @@ const HINTS = {
     { key: "team", label: "Team(s) Together", value: (q) => q.team },
   ],
 };
+
+// This or That hints depend on which stat got picked - most stats hint at
+// career games/MPG, but the Career-High Points stat hints at career PPG and
+// total career minutes instead (that's what actually helps guess a peak
+// single-game number). `field`/`unit` say which player property to show and
+// what to label it with once the hint is revealed.
+const THIS_OR_THAT_HINTS = {
+  default: [
+    { key: "g", label: "Career Games Played", field: "careerG", unit: "G" },
+    { key: "mpg", label: "Career Minutes Per Game", field: "careerMpg", unit: "MPG" },
+  ],
+  highPts: [
+    { key: "ppg", label: "Career PPG", field: "careerPpg", unit: "PPG" },
+    { key: "totalMin", label: "Total Career Minutes", field: "careerTotalMin", unit: "MIN" },
+  ],
+};
+function thisOrThatHints(statKey) {
+  return THIS_OR_THAT_HINTS[statKey] || THIS_OR_THAT_HINTS.default;
+}
 
 const DIFFICULTY_LEVELS = {
   easy: { label: "Easy", description: "2000-Present", cutoffYear: 2000 },
@@ -1001,7 +1016,7 @@ function screenWager() {
 // Shared hint row for every topic: renders a labeled section so hints read as
 // hints (not just plain buttons), and routes every reveal through a confirm
 // popup rather than revealing instantly on tap.
-function renderHintRow(topic, q, revealedTextFor) {
+function renderHintRow(topic, q, hintDefs, revealedTextFor) {
   const wrap = document.createElement("div");
   wrap.className = "hint-section";
 
@@ -1012,7 +1027,7 @@ function renderHintRow(topic, q, revealedTextFor) {
 
   const hintRow = document.createElement("div");
   hintRow.className = "hint-row";
-  HINTS[topic].forEach((hint) => {
+  hintDefs.forEach((hint) => {
     const btn = document.createElement("button");
     const revealed = state.current.hintsRevealed.includes(hint.key);
     btn.className = "hint-btn" + (revealed ? " revealed" : "");
@@ -1124,7 +1139,7 @@ function screenQuestion() {
   card.appendChild(reminder);
 
   card.appendChild(
-    renderHintRow(topic, q, (hint) => (topic === "playerCareer" ? "Shown in table" : hint.value(q)))
+    renderHintRow(topic, q, HINTS[topic], (hint) => (topic === "playerCareer" ? "Shown in table" : hint.value(q)))
   );
 
   const hintCount = state.current.hintsRevealed.length;
@@ -1172,7 +1187,7 @@ function renderPlayerCareerTable(q, hintsRevealed) {
 
   const headCells = ["Season"];
   if (showPos) headCells.push("Pos");
-  headCells.push("Team", "G", "GS", "MPG", "PTS", "REB", "AST");
+  headCells.push("Team", "G", "GS", "MPG", "PTS", "REB", "AST", "BLK", "STL");
   if (showAwards) headCells.push("Awards");
 
   const fmt1 = (v) => (typeof v === "number" ? v.toFixed(1) : v);
@@ -1181,7 +1196,7 @@ function renderPlayerCareerTable(q, hintsRevealed) {
     .map((s) => {
       const cells = [s.season];
       if (showPos) cells.push(s.pos || "—");
-      cells.push(s.team || "—", s.g, s.gs, fmt1(s.mpg), fmt1(s.pts), fmt1(s.trb), fmt1(s.ast));
+      cells.push(s.team || "—", s.g, s.gs, fmt1(s.mpg), fmt1(s.pts), fmt1(s.trb), fmt1(s.ast), fmt1(s.blk), fmt1(s.stl));
       if (showAwards) cells.push(s.awards || "—");
       return `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
     })
@@ -1381,17 +1396,21 @@ function screenThisOrThat() {
   `;
   card.appendChild(header);
 
+  const hintDefs = thisOrThatHints(q.statKey);
+
   if (!revealed) {
-    card.appendChild(renderHintRow("thisOrThat", q, () => "Shown below each name"));
+    card.appendChild(renderHintRow("thisOrThat", q, hintDefs, () => "Shown below each name"));
   }
 
   const list = document.createElement("div");
   list.className = "tot-list";
 
-  const hintSuffix = { g: "G", mpg: "MPG" };
   const playerHints = (player) =>
     state.current.hintsRevealed
-      .map((key) => `<span class="tot-hint">${player[key === "g" ? "careerG" : "careerMpg"].toLocaleString()} ${hintSuffix[key]}</span>`)
+      .map((key) => {
+        const def = hintDefs.find((h) => h.key === key);
+        return `<span class="tot-hint">${player[def.field].toLocaleString()} ${def.unit}</span>`;
+      })
       .join("");
 
   q.pairs.forEach((pair, i) => {

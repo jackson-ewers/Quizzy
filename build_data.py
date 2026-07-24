@@ -48,6 +48,7 @@ THIS_OR_THAT_STATS = [
     ("3p", "Career 3-Pointers Made", 500),
     ("dd", "Career Double-Doubles", 50),
     ("td", "Career Triple-Doubles", 5),
+    ("highPts", "Career-High Points in a Game", 0),
 ]
 # A pair counts as "similar tier" if smaller/larger falls in this window - not so
 # close it's a coin flip, not so far apart it's obvious.
@@ -262,12 +263,13 @@ def main():
     # and fill_blank_boards
     season_totals = defaultdict(
         lambda: {
-            "g": 0, "gs": 0, "mp": 0, "pts": 0, "trb": 0, "ast": 0, "tp": 0,
+            "g": 0, "gs": 0, "mp": 0, "pts": 0, "trb": 0, "ast": 0, "tp": 0, "blk": 0, "stl": 0,
             "teams": [], "positions": [],
             # some stats weren't tracked league-wide in every season (e.g. games-started
-            # before 1970-71, rebounds before 1950-51, minutes before 1951-52) - track
-            # whether we actually saw a real (non-null) value so those cells can show "-"
-            "gsTracked": False, "trbTracked": False, "mpTracked": False,
+            # before 1970-71, rebounds before 1950-51, minutes before 1951-52, blocks/steals
+            # before 1973-74) - track whether we actually saw a real (non-null) value so
+            # those cells can show "-"
+            "gsTracked": False, "trbTracked": False, "mpTracked": False, "blkTracked": False, "stlTracked": False,
         }
     )
 
@@ -306,12 +308,18 @@ def main():
         s["trb"] += r["trb"] or 0
         s["ast"] += r["ast"] or 0
         s["tp"] += r["tp"] or 0
+        s["blk"] += r["blk"] or 0
+        s["stl"] += r["stl"] or 0
         if r["gs"] is not None:
             s["gsTracked"] = True
         if r["trb"] is not None:
             s["trbTracked"] = True
         if r["mp"] is not None:
             s["mpTracked"] = True
+        if r["blk"] is not None:
+            s["blkTracked"] = True
+        if r["stl"] is not None:
+            s["stlTracked"] = True
         if team not in s["teams"]:
             s["teams"].append(team)
         pos = (r["pos"] or "").strip()
@@ -397,6 +405,8 @@ def main():
                         "pts": per_game(s["pts"], s["g"]),
                         "trb": per_game(s["trb"], s["g"]) if s["trbTracked"] else "-",
                         "ast": per_game(s["ast"], s["g"]),
+                        "blk": per_game(s["blk"], s["g"]) if s["blkTracked"] else "-",
+                        "stl": per_game(s["stl"], s["g"]) if s["stlTracked"] else "-",
                         "pos": "-".join(s["positions"]),
                         "team": ", ".join(s["teams"]),
                         "awards": awards_by_season.get((pid, season), ""),
@@ -422,12 +432,18 @@ def main():
         )
     }
     dd_td = defaultdict(lambda: {"dd": 0, "td": 0})
-    for r in con.execute('SELECT player_id, game_id, "double-double" as dd, "triple-double" as td FROM player_game_logs'):
+    game_high_pts = defaultdict(int)
+    for r in con.execute(
+        'SELECT player_id, game_id, "double-double" as dd, "triple-double" as td, pts FROM player_game_logs'
+    ):
         if r["game_id"] not in reg_season_game_ids:
             continue
         e = dd_td[r["player_id"]]
         e["dd"] += r["dd"] or 0
         e["td"] += r["td"] or 0
+        pts = r["pts"] or 0
+        if pts > game_high_pts[r["player_id"]]:
+            game_high_pts[r["player_id"]] = pts
 
     career_rows = con.execute(
         'SELECT player_id, g, pts, trb, ast, "3p" as tp FROM players_career_reg_szn_totals'
@@ -435,10 +451,20 @@ def main():
     career_mpg = {
         r["player_id"]: r["mp"] for r in con.execute("SELECT player_id, mp FROM players_career_reg_szn_per_game")
     }
+    career_ppg = {
+        r["player_id"]: r["pts"] for r in con.execute("SELECT player_id, pts FROM players_career_reg_szn_per_game")
+    }
+    career_total_min = {
+        r["player_id"]: r["mp"] for r in con.execute('SELECT player_id, mp FROM players_career_reg_szn_totals')
+    }
 
     # pts/trb/ast/3p eligibility = top 250 all-time in that stat (players_career_reg_szn_totals).
     # dd/td have no career-totals column to rank by, so they keep a flat threshold instead.
+    # highPts (single-game career high) only requires a 30+ career MPG - it's not ranked by
+    # a career total at all, since a bench player's one huge game is exactly the kind of
+    # surprising match-up this stat is meant to produce.
     TOP_N_ALL_TIME = 250
+    MIN_CAREER_HIGH_MPG = 30
 
     this_or_that_pool = {}
     for stat_key, label, threshold in THIS_OR_THAT_STATS:
@@ -458,6 +484,21 @@ def main():
                             "careerG": round(r["g"] or 0), "careerMpg": round(career_mpg.get(pid) or 0, 1),
                         }
                     )
+        elif stat_key == "highPts":
+            for pid, value in game_high_pts.items():
+                p = players.get(pid)
+                if not p or value <= 0:
+                    continue
+                if (career_mpg.get(pid) or 0) < MIN_CAREER_HIGH_MPG:
+                    continue
+                eligible.append(
+                    {
+                        "id": pid, "name": p["name"], "value": round(value),
+                        "fromYear": p["from"], "toYear": p["to"],
+                        "careerPpg": round(career_ppg.get(pid) or 0, 1),
+                        "careerTotalMin": round(career_total_min.get(pid) or 0),
+                    }
+                )
         else:
             col = "tp" if stat_key == "3p" else stat_key
             ranked = sorted(career_rows, key=lambda r: -(r[col] or 0))[:TOP_N_ALL_TIME]
@@ -694,9 +735,10 @@ def main():
     TROPHY_CASE_AWARD_TYPES = {
         "All-BAA", "All-Defensive", "All-NBA", "All-Rookie", "All-Star",
         "All-Star Game MVP", "Assist Champ", "Block Champ", "Championship",
-        "Clutch Player of the Year", "DPOY", "Finals MVP", "Most Improved Player",
-        "MVP", "NBA 75th Anniversary Team", "Rebound Champ", "ROY",
-        "Scoring Champ", "Sixth Man of the Year", "Steal Champ",
+        "Clutch Player of the Year", "DPOY", "Finals MVP", "Hall of Fame",
+        "Most Improved Player", "MVP", "NBA 75th Anniversary Team",
+        "Rebound Champ", "ROY", "Scoring Champ", "Sixth Man of the Year",
+        "Steal Champ",
     }
     MIN_TROPHY_CASE_TYPES = 3
 
@@ -769,7 +811,7 @@ def main():
     # explicit example (LeBron counts for Easy even though his most-played
     # teammate, Ilgauskas, started in the 1990s and has no All-NBA selections).
     MIN_TEAMMATES_ALL_NBA = 5
-    MIN_SHARED_GAMES = 20  # keep the "played together" flavor stat meaningful
+    MIN_SHARED_GAMES = 250  # a real, sustained teammate pairing, not a fleeting one
 
     all_nba_counts = defaultdict(int)
     for r in con.execute("SELECT player_id FROM player_accolades WHERE award_type = 'All-NBA'"):
