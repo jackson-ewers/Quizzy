@@ -655,7 +655,7 @@ function questionText(topic, q) {
     return `<span class="hl">${q.name}</span> played <span class="hl">${q.sharedGames.toLocaleString()}</span> combined regular-season and playoff games with one teammate more than anyone else in their career. Who was it?`;
   }
   if (topic === "lineups") {
-    return `The <span class="hl">${q.season}</span> <span class="hl">${q.teamName}</span> played <span class="hl">${q.minutesTogether.toLocaleString()}</span> minutes together as this 5-man lineup — but one name is missing. Who is it?`;
+    return `This was the most-used 5-man lineup for the <span class="hl">${q.season}</span> <span class="hl">${q.teamName}</span>, playing <span class="hl">${q.minutesTogether.toLocaleString()}</span> minutes together — but one name is missing. Who is it?`;
   }
   if (topic === "jerseyNumbers") {
     return `What jersey number did <span class="hl">${q.name}</span> wear for the <span class="hl">${q.team}</span>?`;
