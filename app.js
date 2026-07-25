@@ -296,10 +296,12 @@ const FILL_BLANK_FORMATS = ["season", "decade", "allTime", "team"];
 
 function pickFillBlankQuestion() {
   const cutoff = cutoffYear();
-  // all-time boards are fixed historical facts, so they're not filtered by
-  // difficulty - season, decade, and team-roster boards all have a real point
-  // in time and are filtered by that year
-  const eligible = fillBlankBoards.filter((b) => b.format === "allTime" || b.seasonYear >= cutoff);
+  // all-time boards span every era, so they only make sense once difficulty
+  // has no cutoff at all (Hard) - otherwise a "recent-only" player could show
+  // up in an all-time top 5 alongside decades they were never eligible for.
+  // season/decade/team-roster boards each have a real point in time and are
+  // filtered by that year as usual.
+  const eligible = fillBlankBoards.filter((b) => (b.format === "allTime" ? cutoff === 0 : b.seasonYear >= cutoff));
 
   // split evenly across the 4 board formats, regardless of how many boards exist
   // within each one (season and team boards vastly outnumber decade and all-time)

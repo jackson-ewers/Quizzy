@@ -1306,7 +1306,7 @@ def main():
                             "measure": measure,
                             "scope": scope,
                             "format": "decade",
-                            "scopeLabel": f"{decade}s ({scope_suffix})",
+                            "scopeLabel": f"{decade}s Decade ({scope_suffix})",
                             "season": None,
                             "seasonYear": decade,
                             "players": top5,
