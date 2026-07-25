@@ -47,7 +47,7 @@ const TOPIC_META = {
     title: "Fill in the Blank",
     color: "var(--accent-6)",
     description:
-      "You'll see a Top 5 stat leaderboard — for a season, a decade, or (Hard mode only) an all-time career — with one player blanked out. Guess who's missing.",
+      "You'll see a Top 5 stat leaderboard or an All-NBA/All-Defensive team roster — for a season, a decade, or (Hard mode only) an all-time career — with one player blanked out. Guess who's missing.",
   },
   awardsSeason: {
     title: "Awards Season",
