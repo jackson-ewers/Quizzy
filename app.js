@@ -534,37 +534,50 @@ const REPLAY_STAT_CODES_REV = Object.fromEntries(Object.entries(REPLAY_STAT_CODE
 const REPLAY_DIFFICULTY_CODES = { easy: "e", medium: "m", hard: "h" };
 const REPLAY_DIFFICULTY_CODES_REV = Object.fromEntries(Object.entries(REPLAY_DIFFICULTY_CODES).map(([k, v]) => [v, k]));
 
+// Every round also carries the challenger's point delta for that round (as a
+// trailing sign+magnitude pair, since "-" is already the separator between
+// rounds) - that's what lets a friend's playthrough show a live "you vs them"
+// scoreboard after each question instead of only a final total.
 function encodeRoundSpec(spec) {
   const tc = REPLAY_TOPIC_CODES[spec.t];
+  let core;
   if (spec.t === "thisOrThat") {
     const sc = REPLAY_STAT_CODES[spec.s];
     const fields = spec.i.flatMap((idx, k) => [idx, spec.f[k]]);
-    return [tc, sc, ...fields].join(".");
+    core = [tc, sc, ...fields];
+  } else if (spec.t === "fillBlank" || spec.t === "lineups") {
+    core = [tc, spec.i, spec.b];
+  } else {
+    core = [tc, spec.i];
   }
-  if (spec.t === "fillBlank" || spec.t === "lineups") {
-    return [tc, spec.i, spec.b].join(".");
-  }
-  return [tc, spec.i].join(".");
+  const deltaSign = spec.delta < 0 ? 1 : 0;
+  return [...core, deltaSign, Math.abs(spec.delta)].join(".");
 }
 
 function parseRoundSpec(str) {
   const parts = str.split(".");
-  const topic = REPLAY_TOPIC_CODES_REV[parts[0]];
+  const deltaSign = Number(parts[parts.length - 2]);
+  const deltaAbs = Number(parts[parts.length - 1]);
+  if (Number.isNaN(deltaSign) || Number.isNaN(deltaAbs)) return null;
+  const delta = deltaSign ? -deltaAbs : deltaAbs;
+  const core = parts.slice(0, -2);
+
+  const topic = REPLAY_TOPIC_CODES_REV[core[0]];
   if (!topic) return null;
   if (topic === "thisOrThat") {
-    const statKey = REPLAY_STAT_CODES_REV[parts[1]];
-    const nums = parts.slice(2).map(Number);
+    const statKey = REPLAY_STAT_CODES_REV[core[1]];
+    const nums = core.slice(2).map(Number);
     if (!statKey || nums.length !== 6 || nums.some(Number.isNaN)) return null;
-    return { t: topic, s: statKey, i: [nums[0], nums[2], nums[4]], f: [nums[1], nums[3], nums[5]] };
+    return { t: topic, s: statKey, i: [nums[0], nums[2], nums[4]], f: [nums[1], nums[3], nums[5]], delta };
   }
   if (topic === "fillBlank" || topic === "lineups") {
-    const id = Number(parts[1]);
-    const blankIndex = Number(parts[2]);
+    const id = Number(core[1]);
+    const blankIndex = Number(core[2]);
     if (Number.isNaN(id) || Number.isNaN(blankIndex)) return null;
-    return { t: topic, i: id, b: blankIndex };
+    return { t: topic, i: id, b: blankIndex, delta };
   }
-  const id = Number(parts[1]);
-  return Number.isNaN(id) ? null : { t: topic, i: id };
+  const id = Number(core[1]);
+  return Number.isNaN(id) ? null : { t: topic, i: id, delta };
 }
 
 function encodeReplayCode(specs, difficulty) {
@@ -1776,6 +1789,29 @@ function screenResult() {
   `;
   card.appendChild(block);
 
+  if (state.isReplay) {
+    // state.totalScore is already this player's cumulative score through the
+    // round just finished; the challenger's matching cumulative score is a sum
+    // of their per-round deltas riding along in state.replayQueue up to here.
+    const theirCumulative = state.replayQueue.slice(0, state.round + 1).reduce((sum, r) => sum + r.delta, 0);
+    const yourText = `${state.totalScore > 0 ? "+" : ""}${state.totalScore}`;
+    const theirText = `${theirCumulative > 0 ? "+" : ""}${theirCumulative}`;
+    const scoreCard = document.createElement("div");
+    scoreCard.className = "replay-scorecard";
+    scoreCard.innerHTML = `
+      <div class="replay-scorecard-title">Score After Round ${state.round + 1}</div>
+      <div class="replay-scorecard-row">
+        <span>You</span>
+        <span class="${state.totalScore >= 0 ? "score-positive" : "score-negative"}">${yourText}</span>
+      </div>
+      <div class="replay-scorecard-row">
+        <span>Them</span>
+        <span class="${theirCumulative >= 0 ? "score-positive" : "score-negative"}">${theirText}</span>
+      </div>
+    `;
+    card.appendChild(scoreCard);
+  }
+
   const nextBtn = document.createElement("button");
   nextBtn.className = "btn btn-primary btn-lg";
   const isLast = state.round + 1 >= state.gameLength;
@@ -1839,6 +1875,23 @@ function screenEnd() {
   scoreEl.textContent = `${state.totalScore > 0 ? "+" : ""}${state.totalScore}`;
   card.appendChild(scoreEl);
 
+  // the original challenger's per-round deltas ride along in state.replayQueue
+  // (see parseRoundSpec) - summing them gives their final score with no extra
+  // lookup needed, so a friend playing the link can see who actually won.
+  const originalTotal = state.isReplay ? state.replayQueue.reduce((sum, r) => sum + r.delta, 0) : null;
+  if (state.isReplay) {
+    const outcome = state.totalScore > originalTotal ? "won" : state.totalScore < originalTotal ? "lost" : "tied";
+    const outcomeLabel = outcome === "won" ? "You Won! 🎉" : outcome === "lost" ? "You Lost" : "It's a Tie!";
+    const outcomeClass = outcome === "won" ? "score-positive" : outcome === "lost" ? "score-negative" : "";
+    const banner = document.createElement("div");
+    banner.className = "replay-outcome";
+    banner.innerHTML = `
+      <div class="replay-outcome-title ${outcomeClass}">${outcomeLabel}</div>
+      <div class="replay-outcome-compare">You <strong>${state.totalScore > 0 ? "+" : ""}${state.totalScore}</strong> · Them <strong>${originalTotal > 0 ? "+" : ""}${originalTotal}</strong></div>
+    `;
+    card.appendChild(banner);
+  }
+
   const history = document.createElement("div");
   history.className = "round-history";
   history.innerHTML = state.history
@@ -1857,6 +1910,7 @@ function screenEnd() {
   shareRow.innerHTML = `
     <button class="btn btn-ghost" id="shareResultsBtn">Share Results</button>
     <button class="btn btn-ghost" id="challengeBtn">Challenge a Friend</button>
+    ${state.isReplay ? `<button class="btn btn-ghost" id="sendResultBtn">Send Result</button>` : ""}
   `;
   card.appendChild(shareRow);
 
@@ -1876,13 +1930,30 @@ function screenEnd() {
   });
 
   shareRow.querySelector("#challengeBtn").addEventListener("click", () => {
-    const specs = state.history.map((h) => h.spec);
+    // carry each round's own point delta along with its question identity, so
+    // whoever opens this link can see a live "you vs them" score as they play
+    const specs = state.history.map((h) => ({ ...h.spec, delta: h.delta }));
     const code = encodeReplayCode(specs, state.difficulty);
     const url = `${siteUrl}?g=${code}`;
-    const diffLabel = DIFFICULTY_LEVELS[state.difficulty].label;
-    const text = `I scored ${scoreText} on a ${state.history.length}-question Quizzy (${diffLabel}) — take the same one and see if you can top my score.`;
+    const diffDesc = DIFFICULTY_LEVELS[state.difficulty].description;
+    const text = `I challenge you to this ${state.history.length}-question, ${diffDesc}, Quizzy.`;
     shareContent(text, url, shareStatus);
   });
+
+  if (state.isReplay) {
+    shareRow.querySelector("#sendResultBtn").addEventListener("click", () => {
+      const originalText = `${originalTotal > 0 ? "+" : ""}${originalTotal}`;
+      let text;
+      if (state.totalScore > originalTotal) {
+        text = `I beat your Quizzy challenge! Final score: me ${scoreText}, you ${originalText}.`;
+      } else if (state.totalScore < originalTotal) {
+        text = `You got me on your Quizzy challenge. Final score: you ${originalText}, me ${scoreText}.`;
+      } else {
+        text = `We tied on your Quizzy challenge — we both scored ${scoreText}.`;
+      }
+      shareContent(text, siteUrl, shareStatus);
+    });
+  }
 
   const again = document.createElement("button");
   again.className = "btn btn-primary btn-lg";

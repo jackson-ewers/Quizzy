@@ -667,6 +667,54 @@ button {
 .round-row .rr-topic { color: var(--text-secondary); flex: 1; text-align: left; }
 .round-row .rr-delta { font-weight: 700; }
 
+.replay-scorecard {
+  width: 100%;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.replay-scorecard-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.replay-scorecard-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.replay-outcome {
+  width: 100%;
+  background: color-mix(in srgb, var(--accent-6) 14%, var(--surface-solid));
+  border: 1px solid var(--accent-6);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.replay-outcome-title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.replay-outcome-compare {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+.replay-outcome-compare strong { color: var(--text); }
+
 .share-row {
   display: flex;
   gap: 12px;
