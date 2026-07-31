@@ -798,7 +798,7 @@ function renderPrivacyPolicyModal() {
       <h2 class="screen-title">Privacy Policy</h2>
       <div class="modal-body">
         <p><em>Last updated: July 21, 2026</em></p>
-        <p>Quizzy is a free, fan-made NBA trivia game. It doesn't have user accounts, doesn't require you to sign up, and doesn't collect or store any personal information.</p>
+        <p>Quizzy is a fan-made NBA trivia game. It doesn't have user accounts, doesn't require you to sign up, and doesn't collect or store any personal information.</p>
         <p>Your score and game progress live only in your browser for the current session — nothing is saved to a server or shared with anyone.</p>
         <p>Quizzy itself doesn't use cookies or analytics/tracking scripts. The site is hosted on GitHub Pages, which may log basic technical access information (like IP address and browser type) as part of its own infrastructure — see <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener noreferrer">GitHub's Privacy Statement</a> for details on that.</p>
         <p>If you email us, we'll have whatever information you choose to include in that email (like your email address) so we can respond.</p>
@@ -829,7 +829,7 @@ function renderTermsOfUseModal() {
       <h2 class="screen-title">Terms of Use</h2>
       <div class="modal-body">
         <p><em>Last updated: July 21, 2026</em></p>
-        <p>Quizzy is a free trivia game made for fun by an NBA fan. It is not affiliated with, endorsed by, or sponsored by the NBA, its teams, or any players — player names, stats, and team names appear here purely for trivia purposes.</p>
+        <p>Quizzy is a trivia game made for fun by an NBA fan. It is not affiliated with, endorsed by, or sponsored by the NBA, its teams, or any players — player names, stats, and team names appear here purely for trivia purposes.</p>
         <p>Quizzy is provided "as is," with no guarantee that every stat or fact is 100% accurate, and no warranty of any kind. Use it for fun, not as a source of record.</p>
         <p>By using Quizzy, you agree not to misuse the site — for example, by attempting to disrupt it, scrape it at scale, or reverse-engineer it for commercial resale.</p>
         <p>To the fullest extent permitted by law, Quizzy and its creator aren't liable for any damages arising from your use of the site.</p>
