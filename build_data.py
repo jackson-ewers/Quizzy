@@ -20,7 +20,8 @@ import csv
 import json
 import re
 import sqlite3
-from collections import defaultdict
+import unicodedata
+from collections import Counter, defaultdict
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -56,6 +57,15 @@ THIS_OR_THAT_STATS = [
 # close it's a coin flip, not so far apart it's obvious.
 PAIR_RATIO_MAX = 0.85
 PAIR_RATIO_MIN = 0.5
+
+
+def strip_diacritics(s: str) -> str:
+    # "Nikola Jokić" -> "Nikola Jokic" - lets users search/type names without
+    # hunting for the accented character, and matches how most people would
+    # type the name anyway. NFKD splits a letter+accent into base letter plus
+    # a separate combining-mark codepoint, so dropping non-ASCII bytes after
+    # that leaves just the base letter (rather than dropping the whole char).
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
 
 
 def season_decade(season: str) -> int:
@@ -217,7 +227,7 @@ def main():
     players = {
         r["player_id"]: {
             "id": r["player_id"],
-            "name": r["player"].rstrip("*"),
+            "name": strip_diacritics(r["player"].rstrip("*")),
             "pos": (r["pos"] or "").strip(),
             "from": r["from"],
             "to": r["to"],
@@ -226,7 +236,18 @@ def main():
     }
 
     # ---- players_search.json ----
-    search_list = [{"id": p["id"], "name": p["name"]} for p in players.values()]
+    # A handful of players share an identical name (e.g. two different "Bill
+    # Bradley"s) - append their (from-to) career span to just those collided
+    # entries so they're distinguishable in the search dropdown; everyone
+    # else's name is left plain.
+    name_counts = Counter(p["name"] for p in players.values())
+    search_list = [
+        {
+            "id": p["id"],
+            "name": f"{p['name']} ({p['from']}-{p['to']})" if name_counts[p["name"]] > 1 else p["name"],
+        }
+        for p in players.values()
+    ]
     search_list.sort(key=lambda x: x["name"])
     with open(OUT / "players_search.json", "w", encoding="utf-8") as f:
         json.dump(search_list, f, ensure_ascii=False)

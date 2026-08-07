@@ -31,7 +31,7 @@ const TOPIC_META = {
     title: "This or That",
     color: "var(--accent-3)",
     description:
-      "You'll see 3 head-to-head match-ups for a randomly picked career stat, all at once — guess who had more in each, and get all three right to win.",
+      "You'll see a head-to-head match-up for a randomly picked career stat — guess who had more.",
   },
   college: {
     title: "College",
@@ -186,7 +186,7 @@ function freshState() {
       selectedPlayer: null,
       selectedCollege: null,
       selectedNumber: null,
-      totSelections: [null, null, null],
+      totSelection: null,
       totSubmitted: false,
     },
   };
@@ -262,34 +262,21 @@ function pickThisOrThatQuestion() {
 
   const used = state.usedQuestionIds.thisOrThat;
   let candidates = eligible.filter(({ i }) => !used.has(`${statKey}:${i}`));
-  if (candidates.length < 3) {
+  if (candidates.length === 0) {
     used.clear();
     candidates = eligible;
   }
-  candidates = shuffle(candidates);
 
-  const chosen = [];
-  const usedPlayers = new Set();
-  for (const entry of candidates) {
-    if (usedPlayers.has(entry.pair[0].id) || usedPlayers.has(entry.pair[1].id)) continue;
-    chosen.push(entry);
-    usedPlayers.add(entry.pair[0].id);
-    usedPlayers.add(entry.pair[1].id);
-    if (chosen.length === 3) break;
-  }
-  for (const entry of candidates) {
-    if (chosen.length >= 3) break;
-    if (!chosen.some((c) => c.i === entry.i)) chosen.push(entry);
-  }
+  const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+  used.add(`${statKey}:${chosen.i}`);
 
-  chosen.forEach(({ i }) => used.add(`${statKey}:${i}`));
-  const flips = chosen.map(() => Math.random() < 0.5);
-  const pairs = chosen.map(({ pair }, k) => (flips[k] ? [pair[1], pair[0]] : [pair[0], pair[1]]));
+  const flip = Math.random() < 0.5;
+  const pair = flip ? [chosen.pair[1], chosen.pair[0]] : [chosen.pair[0], chosen.pair[1]];
 
-  // pairIndices/flips let a Challenge link reference these 3 match-ups by a
-  // small integer position + a flip bit each, instead of embedding all 6
-  // players' full IDs - a big size saving in the shared URL.
-  return { statKey, statLabel: fullPool.label, pairs, pairIndices: chosen.map((c) => c.i), flips };
+  // pairIndex/flip let a Challenge link reference this match-up by a small
+  // integer position + a flip bit, instead of embedding both players' full
+  // IDs - a size saving in the shared URL.
+  return { statKey, statLabel: fullPool.label, pair, pairIndex: chosen.i, flip };
 }
 
 const FILL_BLANK_FORMATS = ["season", "decade", "allTime", "team"];
@@ -449,7 +436,7 @@ function pickQuestion(topic) {
 // characters, which real messaging apps will truncate or mangle in transit.
 function questionReplaySpec(topic, q) {
   if (topic === "thisOrThat") {
-    return { t: topic, s: q.statKey, i: q.pairIndices, f: q.flips.map((f) => (f ? 1 : 0)) };
+    return { t: topic, s: q.statKey, i: q.pairIndex, f: q.flip ? 1 : 0 };
   }
   if (topic === "fillBlank" || topic === "lineups") {
     return { t: topic, i: q.id, b: q.blankIndex };
@@ -465,12 +452,10 @@ function pickQuestionFromSpec(spec) {
     if (spec.t === "thisOrThat") {
       const fullPool = thisOrThatPool[spec.s];
       if (!fullPool) return null;
-      const pairs = spec.i.map((idx, k) => {
-        const pair = fullPool.pairs[idx];
-        if (!pair) throw new Error("missing pair");
-        return spec.f[k] ? [pair[1], pair[0]] : [pair[0], pair[1]];
-      });
-      return { statKey: spec.s, statLabel: fullPool.label, pairs };
+      const rawPair = fullPool.pairs[spec.i];
+      if (!rawPair) return null;
+      const pair = spec.f ? [rawPair[1], rawPair[0]] : [rawPair[0], rawPair[1]];
+      return { statKey: spec.s, statLabel: fullPool.label, pair, pairIndex: spec.i, flip: !!spec.f };
     }
     if (spec.t === "fillBlank") {
       const board = fillBlankBoards.find((b) => b.id === spec.i);
@@ -543,8 +528,7 @@ function encodeRoundSpec(spec) {
   let core;
   if (spec.t === "thisOrThat") {
     const sc = REPLAY_STAT_CODES[spec.s];
-    const fields = spec.i.flatMap((idx, k) => [idx, spec.f[k]]);
-    core = [tc, sc, ...fields];
+    core = [tc, sc, spec.i, spec.f];
   } else if (spec.t === "fillBlank" || spec.t === "lineups") {
     core = [tc, spec.i, spec.b];
   } else {
@@ -566,9 +550,10 @@ function parseRoundSpec(str) {
   if (!topic) return null;
   if (topic === "thisOrThat") {
     const statKey = REPLAY_STAT_CODES_REV[core[1]];
-    const nums = core.slice(2).map(Number);
-    if (!statKey || nums.length !== 6 || nums.some(Number.isNaN)) return null;
-    return { t: topic, s: statKey, i: [nums[0], nums[2], nums[4]], f: [nums[1], nums[3], nums[5]], delta };
+    const idx = Number(core[2]);
+    const flip = Number(core[3]);
+    if (!statKey || Number.isNaN(idx) || Number.isNaN(flip)) return null;
+    return { t: topic, s: statKey, i: idx, f: flip, delta };
   }
   if (topic === "fillBlank" || topic === "lineups") {
     const id = Number(core[1]);
@@ -697,13 +682,9 @@ function isCorrectGuess(topic, q, selectedId) {
   return selectedId === answerId;
 }
 
-function countThisOrThatCorrect(q, selections) {
-  return selections.reduce((count, sel, i) => {
-    if (sel === null || sel === undefined) return count;
-    const pair = q.pairs[i];
-    const isCorrect = pair[sel].value === Math.max(pair[0].value, pair[1].value);
-    return count + (isCorrect ? 1 : 0);
-  }, 0);
+function isThisOrThatCorrect(q, selection) {
+  if (selection === null || selection === undefined) return false;
+  return q.pair[selection].value === Math.max(q.pair[0].value, q.pair[1].value);
 }
 
 // ---------- Rendering ----------
@@ -1113,7 +1094,7 @@ function screenWheel() {
       if (mySpinToken !== activeSpinToken) return; // superseded by a later spin - ignore
       state.current.topic = topic;
       state.current.question = state.isReplay ? pickQuestionFromSpec(state.replayQueue[state.round]) : pickQuestion(topic);
-      state.current.totSelections = [null, null, null];
+      state.current.totSelection = null;
       state.current.totSubmitted = false;
       state.current.selectedPlayer = null;
       state.current.selectedCollege = null;
@@ -1605,7 +1586,6 @@ function screenThisOrThat() {
 
   if (!revealed) {
     ensureTimer(`round-${state.round}`, () => {
-      const correctCount = countThisOrThatCorrect(q, state.current.totSelections);
       const delta = computePayout(state.current.wager, hintCount, false);
       state.totalScore += delta;
       state.history.push({
@@ -1615,7 +1595,6 @@ function screenThisOrThat() {
         correct: false,
         delta,
         statLabel: q.statLabel,
-        correctCount,
         spec: questionReplaySpec(topic, q),
       });
       stopTimer();
@@ -1635,7 +1614,7 @@ function screenThisOrThat() {
   header.innerHTML = revealed
     ? `<div class="question-text">Who had more <span class="hl">${q.statLabel}</span>?</div>`
     : `
-    <div class="question-text">Who had more <span class="hl">${q.statLabel}</span>? Pick all three, then submit.</div>
+    <div class="question-text">Who had more <span class="hl">${q.statLabel}</span>? Pick one, then submit.</div>
     <div class="wager-reminder">Wagering <strong>${state.current.wager}</strong> point${state.current.wager === 1 ? "" : "s"}</div>
   `;
   card.appendChild(header);
@@ -1646,9 +1625,6 @@ function screenThisOrThat() {
     card.appendChild(renderHintRow("thisOrThat", q, hintDefs, () => "Shown below each name"));
   }
 
-  const list = document.createElement("div");
-  list.className = "tot-list";
-
   const playerHints = (player) =>
     state.current.hintsRevealed
       .map((key) => {
@@ -1657,67 +1633,56 @@ function screenThisOrThat() {
       })
       .join("");
 
-  q.pairs.forEach((pair, i) => {
-    const row = document.createElement("div");
-    row.className = "tot-row";
-    row.innerHTML = `<div class="tot-row-label">Match-up ${i + 1}</div>`;
+  const matchup = document.createElement("div");
+  matchup.className = "tot-matchup";
+  const correctSide = q.pair[0].value > q.pair[1].value ? 0 : 1;
 
-    const matchup = document.createElement("div");
-    matchup.className = "tot-matchup";
-    const correctSide = pair[0].value > pair[1].value ? 0 : 1;
-
-    pair.forEach((player, side) => {
-      const btn = document.createElement("button");
-      btn.className = "tot-choice";
-      if (revealed) {
-        btn.disabled = true;
-        if (side === correctSide) btn.classList.add("tot-choice-correct");
-        else if (state.current.totSelections[i] === side) btn.classList.add("tot-choice-wrong");
-        btn.innerHTML = `<span class="tot-name">${player.name}</span>${playerHints(player)}<span class="tot-value">${player.value.toLocaleString()}</span>`;
-      } else {
-        if (state.current.totSelections[i] === side) btn.classList.add("tot-choice-selected");
-        btn.innerHTML = `<span class="tot-name">${player.name}</span>${playerHints(player)}`;
-        btn.addEventListener("click", () => {
-          state.current.totSelections[i] = side;
-          render();
-        });
-      }
-      matchup.appendChild(btn);
-    });
-
-    const vs = document.createElement("div");
-    vs.className = "tot-vs";
-    vs.textContent = "VS";
-    matchup.appendChild(vs);
-
-    row.appendChild(matchup);
-    list.appendChild(row);
+  q.pair.forEach((player, side) => {
+    const btn = document.createElement("button");
+    btn.className = "tot-choice";
+    if (revealed) {
+      btn.disabled = true;
+      if (side === correctSide) btn.classList.add("tot-choice-correct");
+      else if (state.current.totSelection === side) btn.classList.add("tot-choice-wrong");
+      btn.innerHTML = `<span class="tot-name">${player.name}</span>${playerHints(player)}<span class="tot-value">${player.value.toLocaleString()}</span>`;
+    } else {
+      if (state.current.totSelection === side) btn.classList.add("tot-choice-selected");
+      btn.innerHTML = `<span class="tot-name">${player.name}</span>${playerHints(player)}`;
+      btn.addEventListener("click", () => {
+        state.current.totSelection = side;
+        render();
+      });
+    }
+    matchup.appendChild(btn);
   });
 
-  card.appendChild(list);
+  const vs = document.createElement("div");
+  vs.className = "tot-vs";
+  vs.textContent = "VS";
+  matchup.appendChild(vs);
+
+  card.appendChild(matchup);
 
   if (revealed) {
-    const correctCount = countThisOrThatCorrect(q, state.current.totSelections);
+    const correct = isThisOrThatCorrect(q, state.current.totSelection);
     const summary = document.createElement("div");
     summary.className = "result-detail";
-    summary.textContent = `You got ${correctCount} of 3 right.`;
+    summary.textContent = correct ? "You picked the right side." : "You picked the wrong side.";
     card.appendChild(summary);
 
     const finishBtn = document.createElement("button");
     finishBtn.className = "btn btn-primary btn-lg";
     finishBtn.textContent = "See Round Result";
     finishBtn.addEventListener("click", () => {
-      const allCorrect = correctCount === 3;
-      const delta = computePayout(state.current.wager, hintCount, allCorrect);
+      const delta = computePayout(state.current.wager, hintCount, correct);
       state.totalScore += delta;
       state.history.push({
         topic,
         wager: state.current.wager,
         hints: hintCount,
-        correct: allCorrect,
+        correct,
         delta,
         statLabel: q.statLabel,
-        correctCount,
         spec: questionReplaySpec(topic, q),
       });
       state.screen = "result";
@@ -1727,21 +1692,14 @@ function screenThisOrThat() {
     return card;
   }
 
-  const stakesNote = document.createElement("div");
-  stakesNote.className = "tagline";
-  stakesNote.style.marginBottom = "-6px";
-  stakesNote.textContent = "\"Correct\" = all 3 right. \"Wrong\" = anything else.";
-  card.appendChild(stakesNote);
-
   const stakes = document.createElement("div");
   stakes.innerHTML = renderStakesTable(state.current.wager, hintCount);
   card.appendChild(stakes);
 
-  const allSelected = state.current.totSelections.every((s) => s !== null);
   const submitBtn = document.createElement("button");
   submitBtn.className = "btn btn-primary btn-lg";
-  submitBtn.textContent = "Submit All 3";
-  submitBtn.disabled = !allSelected;
+  submitBtn.textContent = "Submit Guess";
+  submitBtn.disabled = state.current.totSelection === null;
   submitBtn.addEventListener("click", () => {
     stopTimer();
     state.current.totSubmitted = true;
@@ -1766,8 +1724,8 @@ function screenResult() {
   let detailHtml;
   if (last.topic === "thisOrThat") {
     detailHtml = last.correct
-      ? `You went 3-for-3 on <strong>${last.statLabel}</strong>.`
-      : `You went ${last.correctCount}/3 on <strong>${last.statLabel}</strong>.`;
+      ? `You picked the right side on <strong>${last.statLabel}</strong>.`
+      : `You picked the wrong side on <strong>${last.statLabel}</strong>.`;
   } else if (last.correct) {
     detailHtml = `You guessed <strong>${last.guessed}</strong> — nailed it.`;
   } else if (last.guessed === "(ran out of time)") {
@@ -1827,7 +1785,7 @@ function screenResult() {
       selectedPlayer: null,
       selectedCollege: null,
       selectedNumber: null,
-      totSelections: [null, null, null],
+      totSelection: null,
       totSubmitted: false,
     };
     if (state.round >= state.gameLength) {
@@ -1905,12 +1863,17 @@ function screenEnd() {
     .join("");
   card.appendChild(history);
 
+  // A friend playing someone else's challenge shouldn't see "Share Results"
+  // or "Challenge a Friend" - re-sharing or re-challenging from inside
+  // someone else's game is confusing, and the only thing that actually makes
+  // sense here is reporting the outcome back to whoever sent the challenge.
   const shareRow = document.createElement("div");
   shareRow.className = "share-row";
-  shareRow.innerHTML = `
+  shareRow.innerHTML = state.isReplay
+    ? `<button class="btn btn-ghost" id="sendResultBtn">Send Back Result</button>`
+    : `
     <button class="btn btn-ghost" id="shareResultsBtn">Share Results</button>
     <button class="btn btn-ghost" id="challengeBtn">Challenge a Friend</button>
-    ${state.isReplay ? `<button class="btn btn-ghost" id="sendResultBtn">Send Result</button>` : ""}
   `;
   card.appendChild(shareRow);
 
@@ -1920,25 +1883,6 @@ function screenEnd() {
 
   const scoreText = `${state.totalScore > 0 ? "+" : ""}${state.totalScore}`;
   const siteUrl = `${location.origin}${location.pathname}`;
-
-  shareRow.querySelector("#shareResultsBtn").addEventListener("click", () => {
-    const lines = state.history.map(
-      (h) => `${TOPIC_META[h.topic].title}: ${h.delta > 0 ? "+" : ""}${h.delta}`
-    );
-    const text = `My Quizzy score: ${scoreText}\n${lines.join("\n")}`;
-    shareContent(text, siteUrl, shareStatus);
-  });
-
-  shareRow.querySelector("#challengeBtn").addEventListener("click", () => {
-    // carry each round's own point delta along with its question identity, so
-    // whoever opens this link can see a live "you vs them" score as they play
-    const specs = state.history.map((h) => ({ ...h.spec, delta: h.delta }));
-    const code = encodeReplayCode(specs, state.difficulty);
-    const url = `${siteUrl}?g=${code}`;
-    const diffDesc = DIFFICULTY_LEVELS[state.difficulty].description;
-    const text = `I challenge you to this ${state.history.length}-question, ${diffDesc}, Quizzy.`;
-    shareContent(text, url, shareStatus);
-  });
 
   if (state.isReplay) {
     shareRow.querySelector("#sendResultBtn").addEventListener("click", () => {
@@ -1952,6 +1896,26 @@ function screenEnd() {
         text = `We tied on your Quizzy challenge — we both scored ${scoreText}.`;
       }
       shareContent(text, siteUrl, shareStatus);
+    });
+  } else {
+    shareRow.querySelector("#shareResultsBtn").addEventListener("click", () => {
+      const lines = state.history.map(
+        (h) => `${TOPIC_META[h.topic].title}: ${h.delta > 0 ? "+" : ""}${h.delta}`
+      );
+      const text = `My Quizzy score: ${scoreText}\n${lines.join("\n")}`;
+      shareContent(text, siteUrl, shareStatus);
+    });
+
+    shareRow.querySelector("#challengeBtn").addEventListener("click", () => {
+      // carry each round's own point delta along with its question identity,
+      // so whoever opens this link can see a live "you vs them" score as
+      // they play
+      const specs = state.history.map((h) => ({ ...h.spec, delta: h.delta }));
+      const code = encodeReplayCode(specs, state.difficulty);
+      const url = `${siteUrl}?g=${code}`;
+      const diffDesc = DIFFICULTY_LEVELS[state.difficulty].description;
+      const text = `I challenge you to this ${state.history.length}-question, ${diffDesc}, Quizzy.`;
+      shareContent(text, url, shareStatus);
     });
   }
 
