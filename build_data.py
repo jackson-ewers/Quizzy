@@ -68,6 +68,14 @@ def strip_diacritics(s: str) -> str:
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
 
 
+def ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def season_decade(season: str) -> int:
     # "Decade" is shifted one season earlier than a strict start-year-mod-10
     # bucketing, to match all-decade-team convention: the "1990s" is the
@@ -649,6 +657,34 @@ def main():
             continue
         team_games_by_player_season[(r["player_id"], r["season"])][team] += r["g"] or 0
 
+    # Full draft order per year (every NBA/BAA pick that year, not just the
+    # all-star subset draft_questions draws from) - lets the "drafted
+    # before/after" hint reference whoever was actually picked immediately
+    # around a question player, even if that neighbor isn't themselves
+    # notable enough to ever be a question.
+    draft_order_by_year = defaultdict(list)
+    for r in draft_rows:
+        p = players.get(r["player_id"])
+        if not p:
+            continue
+        draft_order_by_year[r["draft_year"]].append((round(r["pick"]), p["name"]))
+    for yr in draft_order_by_year:
+        draft_order_by_year[yr].sort(key=lambda t: t[0])
+
+    def draft_neighbors_hint(draft_year, pick):
+        order = draft_order_by_year.get(draft_year, [])
+        idx = next((i for i, (pk, _) in enumerate(order) if pk == pick), None)
+        if idx is None:
+            return "Unavailable"
+        before = order[idx - 1] if idx > 0 else None
+        after = order[idx + 1] if idx < len(order) - 1 else None
+        parts = []
+        if before:
+            parts.append(f"Before: {before[1]} ({ordinal(before[0])})")
+        if after:
+            parts.append(f"After: {after[1]} ({ordinal(after[0])})")
+        return " · ".join(parts) if parts else "Unavailable"
+
     draft_questions = []
     qid = 0
     for pid, entries in draft_by_player.items():
@@ -669,6 +705,7 @@ def main():
         if team_games_by_player_season.get((pid, rookie_season), {}).get(team_abbr, 0) < 1:
             continue  # never actually played a game for the team that drafted them as a rookie
         college = (r["college"] or "").strip()
+        pick = round(r["pick"])
         qid += 1
         draft_questions.append(
             {
@@ -677,11 +714,12 @@ def main():
                 "name": p["name"],
                 "draftYear": r["draft_year"],
                 "round": round(r["round"]),
-                "pick": round(r["pick"]),
+                "pick": pick,
                 "teamAbbr": team_abbr,
                 "teamName": team_names[team_abbr],
                 "pos": primary_pos.get(pid, p["pos"]),
                 "college": college if college else "Did Not Attend",
+                "draftNeighborsHint": draft_neighbors_hint(r["draft_year"], pick),
                 "fromYear": p["from"],
                 "toYear": p["to"],
             }
@@ -1372,12 +1410,12 @@ def main():
         if len(entries) != 5:
             continue
         bid += 1
-        ordinal = TEAM_ORDINAL.get(team_number, f"{team_number}th")
+        team_ordinal = TEAM_ORDINAL.get(team_number, f"{team_number}th")
         fill_blank_boards.append(
             {
                 "id": bid,
                 "statKey": award_type,
-                "statLabel": f"{start_year} {ordinal} Team {award_type}",
+                "statLabel": f"{start_year} {team_ordinal} Team {award_type}",
                 "measure": "roster",
                 "scope": "season",
                 "format": "team",

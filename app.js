@@ -90,7 +90,7 @@ const HINTS = {
     { key: "mascot", label: "Mascot", value: (q) => q.mascot },
   ],
   draft: [
-    { key: "pos", label: "Position", value: (q) => q.pos },
+    { key: "neighbors", label: "Drafted Before/After", value: (q) => q.draftNeighborsHint },
     { key: "college", label: "College", value: (q) => q.college },
   ],
   fillBlank: [
