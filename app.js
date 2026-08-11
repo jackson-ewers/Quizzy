@@ -1823,6 +1823,14 @@ async function shareContent(text, url, statusEl) {
   }, 3000);
 }
 
+// navigator.share's OS-level sheet doesn't reliably offer "post to X" on
+// desktop (it's Messages/Notes/Mail-type targets instead) - this opens X's
+// own tweet-compose intent link directly, pre-filled, in a new tab.
+function postToX(text, url) {
+  const params = new URLSearchParams({ text, url });
+  window.open(`https://twitter.com/intent/tweet?${params.toString()}`, "_blank", "noopener,noreferrer");
+}
+
 function screenEnd() {
   const card = document.createElement("div");
   card.className = "card";
@@ -1863,6 +1871,41 @@ function screenEnd() {
     .join("");
   card.appendChild(history);
 
+  const scoreText = `${state.totalScore > 0 ? "+" : ""}${state.totalScore}`;
+  const siteUrl = `${location.origin}${location.pathname}`;
+
+  // each action's share text/link built once so both the generic Share
+  // button and its dedicated "post to X" icon button send the same content
+  const sendResultPayload = () => {
+    const originalText = `${originalTotal > 0 ? "+" : ""}${originalTotal}`;
+    let text;
+    if (state.totalScore > originalTotal) {
+      text = `I beat your Quizzy challenge! Final score: me ${scoreText}, you ${originalText}.`;
+    } else if (state.totalScore < originalTotal) {
+      text = `You got me on your Quizzy challenge. Final score: you ${originalText}, me ${scoreText}.`;
+    } else {
+      text = `We tied on your Quizzy challenge — we both scored ${scoreText}.`;
+    }
+    return { text, url: siteUrl };
+  };
+  const shareResultsPayload = () => {
+    const lines = state.history.map((h) => `${TOPIC_META[h.topic].title}: ${h.delta > 0 ? "+" : ""}${h.delta}`);
+    return { text: `My Quizzy score: ${scoreText}\n${lines.join("\n")}`, url: siteUrl };
+  };
+  const challengePayload = () => {
+    // carry each round's own point delta along with its question identity,
+    // so whoever opens this link can see a live "you vs them" score as they play
+    const specs = state.history.map((h) => ({ ...h.spec, delta: h.delta }));
+    const code = encodeReplayCode(specs, state.difficulty);
+    const diffDesc = DIFFICULTY_LEVELS[state.difficulty].description;
+    return {
+      text: `I challenge you to this ${state.history.length}-question, ${diffDesc}, Quizzy.`,
+      url: `${siteUrl}?g=${code}`,
+    };
+  };
+
+  const xIcon = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`;
+
   // A friend playing someone else's challenge shouldn't see "Share Results"
   // or "Challenge a Friend" - re-sharing or re-challenging from inside
   // someone else's game is confusing, and the only thing that actually makes
@@ -1870,10 +1913,20 @@ function screenEnd() {
   const shareRow = document.createElement("div");
   shareRow.className = "share-row";
   shareRow.innerHTML = state.isReplay
-    ? `<button class="btn btn-ghost" id="sendResultBtn">Send Back Result</button>`
+    ? `
+    <div class="share-action">
+      <button class="btn btn-ghost" id="sendResultBtn">Send Back Result</button>
+      <button class="share-x-btn" id="sendResultXBtn" aria-label="Post to X" title="Post to X">${xIcon}</button>
+    </div>`
     : `
-    <button class="btn btn-ghost" id="shareResultsBtn">Share Results</button>
-    <button class="btn btn-ghost" id="challengeBtn">Challenge a Friend</button>
+    <div class="share-action">
+      <button class="btn btn-ghost" id="shareResultsBtn">Share Results</button>
+      <button class="share-x-btn" id="shareResultsXBtn" aria-label="Post to X" title="Post to X">${xIcon}</button>
+    </div>
+    <div class="share-action">
+      <button class="btn btn-ghost" id="challengeBtn">Challenge a Friend</button>
+      <button class="share-x-btn" id="challengeXBtn" aria-label="Post to X" title="Post to X">${xIcon}</button>
+    </div>
   `;
   card.appendChild(shareRow);
 
@@ -1881,41 +1934,32 @@ function screenEnd() {
   shareStatus.className = "share-status";
   card.appendChild(shareStatus);
 
-  const scoreText = `${state.totalScore > 0 ? "+" : ""}${state.totalScore}`;
-  const siteUrl = `${location.origin}${location.pathname}`;
-
   if (state.isReplay) {
     shareRow.querySelector("#sendResultBtn").addEventListener("click", () => {
-      const originalText = `${originalTotal > 0 ? "+" : ""}${originalTotal}`;
-      let text;
-      if (state.totalScore > originalTotal) {
-        text = `I beat your Quizzy challenge! Final score: me ${scoreText}, you ${originalText}.`;
-      } else if (state.totalScore < originalTotal) {
-        text = `You got me on your Quizzy challenge. Final score: you ${originalText}, me ${scoreText}.`;
-      } else {
-        text = `We tied on your Quizzy challenge — we both scored ${scoreText}.`;
-      }
-      shareContent(text, siteUrl, shareStatus);
+      const { text, url } = sendResultPayload();
+      shareContent(text, url, shareStatus);
+    });
+    shareRow.querySelector("#sendResultXBtn").addEventListener("click", () => {
+      const { text, url } = sendResultPayload();
+      postToX(text, url);
     });
   } else {
     shareRow.querySelector("#shareResultsBtn").addEventListener("click", () => {
-      const lines = state.history.map(
-        (h) => `${TOPIC_META[h.topic].title}: ${h.delta > 0 ? "+" : ""}${h.delta}`
-      );
-      const text = `My Quizzy score: ${scoreText}\n${lines.join("\n")}`;
-      shareContent(text, siteUrl, shareStatus);
+      const { text, url } = shareResultsPayload();
+      shareContent(text, url, shareStatus);
+    });
+    shareRow.querySelector("#shareResultsXBtn").addEventListener("click", () => {
+      const { text, url } = shareResultsPayload();
+      postToX(text, url);
     });
 
     shareRow.querySelector("#challengeBtn").addEventListener("click", () => {
-      // carry each round's own point delta along with its question identity,
-      // so whoever opens this link can see a live "you vs them" score as
-      // they play
-      const specs = state.history.map((h) => ({ ...h.spec, delta: h.delta }));
-      const code = encodeReplayCode(specs, state.difficulty);
-      const url = `${siteUrl}?g=${code}`;
-      const diffDesc = DIFFICULTY_LEVELS[state.difficulty].description;
-      const text = `I challenge you to this ${state.history.length}-question, ${diffDesc}, Quizzy.`;
+      const { text, url } = challengePayload();
       shareContent(text, url, shareStatus);
+    });
+    shareRow.querySelector("#challengeXBtn").addEventListener("click", () => {
+      const { text, url } = challengePayload();
+      postToX(text, url);
     });
   }
 

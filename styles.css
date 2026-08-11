@@ -723,6 +723,26 @@ button {
   flex-wrap: wrap;
 }
 .share-row .btn { flex: 1 1 160px; }
+
+.share-action {
+  display: flex;
+  gap: 6px;
+  flex: 1 1 200px;
+}
+.share-action .btn { flex: 1 1 auto; }
+.share-x-btn {
+  flex: 0 0 auto;
+  width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.share-x-btn:hover { background: var(--surface-solid); }
 .share-status {
   min-height: 18px;
   font-size: 13px;
