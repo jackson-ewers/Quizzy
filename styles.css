@@ -198,7 +198,6 @@ button {
   background: var(--text);
   color: var(--bg);
 }
-.btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
 .btn:active { transform: translateY(0) scale(0.97); }
 .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; box-shadow: none; }
 
@@ -249,7 +248,6 @@ button {
   gap: 6px;
   transition: all 0.2s ease;
 }
-.length-card:hover { border-color: var(--accent); transform: translateY(-2px); }
 .length-card.selected {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--surface-solid));
@@ -400,7 +398,6 @@ button {
   color: var(--text);
   transition: all 0.15s ease;
 }
-.wager-btn:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-2px); }
 .wager-btn:disabled {
   opacity: 0.25;
   cursor: not-allowed;
@@ -485,7 +482,6 @@ button {
   transition: all 0.15s ease;
   min-width: 160px;
 }
-.hint-btn:hover:not(:disabled) { border-color: var(--accent-2); color: var(--accent-2); }
 .hint-btn:disabled { cursor: default; }
 .hint-btn.revealed {
   border-style: solid;
@@ -588,7 +584,7 @@ button {
   border-bottom: 1px solid var(--border);
 }
 .search-result-item:last-child { border-bottom: none; }
-.search-result-item:hover, .search-result-item.active {
+.search-result-item.active {
   background: color-mix(in srgb, var(--accent-2) 10%, transparent);
 }
 .selected-player {
@@ -742,7 +738,6 @@ button {
   color: var(--text);
   cursor: pointer;
 }
-.share-x-btn:hover { background: var(--surface-solid); }
 .share-status {
   min-height: 18px;
   font-size: 13px;
@@ -846,10 +841,6 @@ button {
   gap: 8px;
   transition: all 0.15s ease;
 }
-.tot-choice:hover:not(:disabled) {
-  border-color: var(--accent-2);
-  transform: translateY(-2px);
-}
 .tot-choice-selected {
   border-color: var(--accent-2);
   background: color-mix(in srgb, var(--accent-2) 12%, var(--surface-solid));
@@ -926,10 +917,6 @@ button {
   order: -1;
   margin-bottom: 4px;
 }
-.how-to-play-btn:hover {
-  color: var(--text);
-  border-color: var(--accent-2);
-}
 .app-footer {
   width: 100%;
   display: flex;
@@ -958,7 +945,6 @@ button {
   padding: 0;
   cursor: pointer;
 }
-.footer-link:hover { color: var(--accent-2); text-decoration: underline; }
 .footer-social {
   display: flex;
   gap: 10px;
@@ -975,7 +961,6 @@ button {
   border: 1px solid var(--border);
   transition: all 0.15s ease;
 }
-.footer-icon-link:hover { color: var(--accent-2); border-color: var(--accent-2); }
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1021,7 +1006,6 @@ button {
   z-index: 2;
   flex-shrink: 0;
 }
-.modal-close-btn:hover { color: var(--text); border-color: var(--accent-2); }
 .modal-body {
   width: 100%;
   color: var(--text);
@@ -1102,4 +1086,24 @@ button {
   .timer-display { font-size: 22px; }
   .wheel-stage { width: min(320px, 80vw); height: min(320px, 80vw); }
   .wheel-hub { width: 54px; height: 54px; }
+}
+
+/* ---------- Hover-only enhancements ----------
+   Gated behind (hover: hover) so these never trigger on touchscreens - a tap
+   has no "unhover" event, so on mobile Safari a plain `:hover` rule stays
+   visually stuck on (looking like the button/card/hint is still selected or
+   pressed) until the user happens to tap something else entirely. Real
+   mouse/trackpad devices get the hover feedback as normal. */
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
+  .length-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .wager-btn:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-2px); }
+  .hint-btn:hover:not(:disabled) { border-color: var(--accent-2); color: var(--accent-2); }
+  .search-result-item:hover { background: color-mix(in srgb, var(--accent-2) 10%, transparent); }
+  .share-x-btn:hover { background: var(--surface-solid); }
+  .tot-choice:hover:not(:disabled) { border-color: var(--accent-2); transform: translateY(-2px); }
+  .how-to-play-btn:hover { color: var(--text); border-color: var(--accent-2); }
+  .footer-link:hover { color: var(--accent-2); text-decoration: underline; }
+  .footer-icon-link:hover { color: var(--accent-2); border-color: var(--accent-2); }
+  .modal-close-btn:hover { color: var(--text); border-color: var(--accent-2); }
 }
