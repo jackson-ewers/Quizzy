@@ -663,6 +663,26 @@ button {
 .round-row .rr-topic { color: var(--text-secondary); flex: 1; text-align: left; }
 .round-row .rr-delta { font-weight: 700; }
 
+.round-row-replay {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  font-size: 14px;
+}
+.rrr-topic { color: var(--text-secondary); font-size: 13px; }
+.rrr-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rrr-who { font-weight: 700; width: 40px; flex-shrink: 0; }
+.rrr-wager { color: var(--text-secondary); flex: 1; }
+.rrr-delta { font-weight: 700; }
+
 .replay-scorecard {
   width: 100%;
   background: var(--surface-solid);
@@ -720,24 +740,34 @@ button {
 }
 .share-row .btn { flex: 1 1 160px; }
 
-.share-action {
+.share-popover {
+  position: fixed;
+  z-index: 50;
+  width: 200px;
   display: flex;
-  gap: 6px;
-  flex: 1 1 200px;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
 }
-.share-action .btn { flex: 1 1 auto; }
-.share-x-btn {
-  flex: 0 0 auto;
-  width: 44px;
+.share-popover-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  border: 1.5px solid var(--border);
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: none;
   background: transparent;
   color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  text-align: left;
   cursor: pointer;
 }
+.share-popover-item svg { flex-shrink: 0; }
 .share-status {
   min-height: 18px;
   font-size: 13px;
@@ -1100,7 +1130,7 @@ button {
   .wager-btn:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-2px); }
   .hint-btn:hover:not(:disabled) { border-color: var(--accent-2); color: var(--accent-2); }
   .search-result-item:hover { background: color-mix(in srgb, var(--accent-2) 10%, transparent); }
-  .share-x-btn:hover { background: var(--surface-solid); }
+  .share-popover-item:hover { background: color-mix(in srgb, var(--accent-2) 10%, transparent); }
   .tot-choice:hover:not(:disabled) { border-color: var(--accent-2); transform: translateY(-2px); }
   .how-to-play-btn:hover { color: var(--text); border-color: var(--accent-2); }
   .footer-link:hover { color: var(--accent-2); text-decoration: underline; }

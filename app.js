@@ -519,10 +519,11 @@ const REPLAY_STAT_CODES_REV = Object.fromEntries(Object.entries(REPLAY_STAT_CODE
 const REPLAY_DIFFICULTY_CODES = { easy: "e", medium: "m", hard: "h" };
 const REPLAY_DIFFICULTY_CODES_REV = Object.fromEntries(Object.entries(REPLAY_DIFFICULTY_CODES).map(([k, v]) => [v, k]));
 
-// Every round also carries the challenger's point delta for that round (as a
-// trailing sign+magnitude pair, since "-" is already the separator between
-// rounds) - that's what lets a friend's playthrough show a live "you vs them"
-// scoreboard after each question instead of only a final total.
+// Every round also carries the challenger's wager and point delta for that
+// round (as trailing fields, since "-" is already the separator between
+// rounds) - that's what lets a friend's playthrough show a live "you vs
+// them" scoreboard after each question, and a full wager-by-wager breakdown
+// at the end, instead of only a final total.
 function encodeRoundSpec(spec) {
   const tc = REPLAY_TOPIC_CODES[spec.t];
   let core;
@@ -535,16 +536,17 @@ function encodeRoundSpec(spec) {
     core = [tc, spec.i];
   }
   const deltaSign = spec.delta < 0 ? 1 : 0;
-  return [...core, deltaSign, Math.abs(spec.delta)].join(".");
+  return [...core, deltaSign, Math.abs(spec.delta), spec.wager].join(".");
 }
 
 function parseRoundSpec(str) {
   const parts = str.split(".");
-  const deltaSign = Number(parts[parts.length - 2]);
-  const deltaAbs = Number(parts[parts.length - 1]);
-  if (Number.isNaN(deltaSign) || Number.isNaN(deltaAbs)) return null;
+  const wager = Number(parts[parts.length - 1]);
+  const deltaAbs = Number(parts[parts.length - 2]);
+  const deltaSign = Number(parts[parts.length - 3]);
+  if (Number.isNaN(wager) || Number.isNaN(deltaSign) || Number.isNaN(deltaAbs)) return null;
   const delta = deltaSign ? -deltaAbs : deltaAbs;
-  const core = parts.slice(0, -2);
+  const core = parts.slice(0, -3);
 
   const topic = REPLAY_TOPIC_CODES_REV[core[0]];
   if (!topic) return null;
@@ -553,16 +555,16 @@ function parseRoundSpec(str) {
     const idx = Number(core[2]);
     const flip = Number(core[3]);
     if (!statKey || Number.isNaN(idx) || Number.isNaN(flip)) return null;
-    return { t: topic, s: statKey, i: idx, f: flip, delta };
+    return { t: topic, s: statKey, i: idx, f: flip, delta, wager };
   }
   if (topic === "fillBlank" || topic === "lineups") {
     const id = Number(core[1]);
     const blankIndex = Number(core[2]);
     if (Number.isNaN(id) || Number.isNaN(blankIndex)) return null;
-    return { t: topic, i: id, b: blankIndex, delta };
+    return { t: topic, i: id, b: blankIndex, delta, wager };
   }
   const id = Number(core[1]);
-  return Number.isNaN(id) ? null : { t: topic, i: id, delta };
+  return Number.isNaN(id) ? null : { t: topic, i: id, delta, wager };
 }
 
 function encodeReplayCode(specs, difficulty) {
@@ -1800,35 +1802,88 @@ function screenResult() {
   return card;
 }
 
-// Tries the native share sheet first (covers "post to Twitter/text a
-// friend/etc." in one shot on mobile); falls back to copying the full
-// text+link to the clipboard when Web Share isn't available or is cancelled.
-async function shareContent(text, url, statusEl) {
-  if (navigator.share) {
-    try {
-      await navigator.share({ text, url });
-      return;
-    } catch (e) {
-      if (e && e.name === "AbortError") return;
-    }
-  }
-  try {
-    await navigator.clipboard.writeText(`${text}\n${url}`);
-    statusEl.textContent = "Copied to clipboard!";
-  } catch (e) {
-    statusEl.textContent = "Couldn't share or copy — please copy the link manually.";
-  }
-  setTimeout(() => {
-    statusEl.textContent = "";
-  }, 3000);
-}
-
 // navigator.share's OS-level sheet doesn't reliably offer "post to X" on
 // desktop (it's Messages/Notes/Mail-type targets instead) - this opens X's
 // own tweet-compose intent link directly, pre-filled, in a new tab.
 function postToX(text, url) {
   const params = new URLSearchParams({ text, url });
   window.open(`https://twitter.com/intent/tweet?${params.toString()}`, "_blank", "noopener,noreferrer");
+}
+
+function closeSharePopover() {
+  document.querySelectorAll(".share-popover").forEach((el) => el.remove());
+}
+
+// One button, one small menu - covers "post to X directly" plus "anywhere
+// else" (native share sheet for installed apps, or a copied link that works
+// literally anywhere) without needing a second button on-screen per action.
+function openSharePopover(anchorBtn, getPayload, statusEl) {
+  closeSharePopover();
+  const { text, url } = getPayload();
+
+  const rect = anchorBtn.getBoundingClientRect();
+  const pop = document.createElement("div");
+  pop.className = "share-popover";
+  pop.style.top = `${rect.bottom + 8}px`;
+  pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 216))}px`;
+  pop.innerHTML = `
+    <button class="share-popover-item" id="sharePopX">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+      Post to X
+    </button>
+    <button class="share-popover-item" id="sharePopCopy">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+      Copy Link
+    </button>
+    ${
+      navigator.share
+        ? `<button class="share-popover-item" id="sharePopMore">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.5l6.8-3.9M8.6 13.5l6.8 3.9"/></svg>
+      More Options
+    </button>`
+        : ""
+    }
+  `;
+  document.body.appendChild(pop);
+
+  pop.querySelector("#sharePopX").addEventListener("click", () => {
+    closeSharePopover();
+    postToX(text, url);
+  });
+  pop.querySelector("#sharePopCopy").addEventListener("click", async () => {
+    closeSharePopover();
+    try {
+      await navigator.clipboard.writeText(`${text}\n${url}`);
+      statusEl.textContent = "Copied to clipboard!";
+    } catch {
+      statusEl.textContent = "Couldn't copy — please copy the link manually.";
+    }
+    setTimeout(() => {
+      statusEl.textContent = "";
+    }, 3000);
+  });
+  const moreBtn = pop.querySelector("#sharePopMore");
+  if (moreBtn) {
+    moreBtn.addEventListener("click", async () => {
+      closeSharePopover();
+      try {
+        await navigator.share({ text, url });
+      } catch {
+        // AbortError (user cancelled the native sheet) or any other failure - nothing to do
+      }
+    });
+  }
+
+  // deferred so the same click that opened the popover doesn't immediately
+  // count as an "outside click" and close it again
+  setTimeout(() => {
+    document.addEventListener("click", function onDocClick(e) {
+      if (!pop.contains(e.target) && e.target !== anchorBtn) {
+        closeSharePopover();
+        document.removeEventListener("click", onDocClick);
+      }
+    });
+  }, 0);
 }
 
 function screenEnd() {
@@ -1860,9 +1915,27 @@ function screenEnd() {
 
   const history = document.createElement("div");
   history.className = "round-history";
-  history.innerHTML = state.history
-    .map(
-      (h, i) => `
+  history.innerHTML = state.isReplay
+    ? state.history
+        .map((h, i) => {
+          const theirs = state.replayQueue[i];
+          const side = (who, wager, delta) => `
+            <div class="rrr-side">
+              <span class="rrr-who">${who}</span>
+              <span class="rrr-wager">wagered ${wager}</span>
+              <span class="rrr-delta ${delta >= 0 ? "score-positive" : "score-negative"}">${delta > 0 ? "+" : ""}${delta}</span>
+            </div>`;
+          return `
+          <div class="round-row-replay">
+            <div class="rrr-topic">#${i + 1} · ${TOPIC_META[h.topic].title}</div>
+            ${side("You", h.wager, h.delta)}
+            ${side("Them", theirs.wager, theirs.delta)}
+          </div>`;
+        })
+        .join("")
+    : state.history
+        .map(
+          (h, i) => `
       <div class="round-row">
         <span class="rr-topic">#${i + 1} · ${TOPIC_META[h.topic].title} · wagered ${h.wager}</span>
         <span class="rr-delta ${h.delta >= 0 ? "score-positive" : "score-negative"}">${h.delta > 0 ? "+" : ""}${h.delta}</span>
@@ -1893,9 +1966,10 @@ function screenEnd() {
     return { text: `My Quizzy score: ${scoreText}\n${lines.join("\n")}`, url: siteUrl };
   };
   const challengePayload = () => {
-    // carry each round's own point delta along with its question identity,
-    // so whoever opens this link can see a live "you vs them" score as they play
-    const specs = state.history.map((h) => ({ ...h.spec, delta: h.delta }));
+    // carry each round's own wager and point delta along with its question
+    // identity, so whoever opens this link can see a live "you vs them"
+    // score as they play and a full wager-by-wager breakdown at the end
+    const specs = state.history.map((h) => ({ ...h.spec, delta: h.delta, wager: h.wager }));
     const code = encodeReplayCode(specs, state.difficulty);
     const diffDesc = DIFFICULTY_LEVELS[state.difficulty].description;
     return {
@@ -1904,8 +1978,6 @@ function screenEnd() {
     };
   };
 
-  const xIcon = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`;
-
   // A friend playing someone else's challenge shouldn't see "Share Results"
   // or "Challenge a Friend" - re-sharing or re-challenging from inside
   // someone else's game is confusing, and the only thing that actually makes
@@ -1913,20 +1985,10 @@ function screenEnd() {
   const shareRow = document.createElement("div");
   shareRow.className = "share-row";
   shareRow.innerHTML = state.isReplay
-    ? `
-    <div class="share-action">
-      <button class="btn btn-ghost" id="sendResultBtn">Send Back Result</button>
-      <button class="share-x-btn" id="sendResultXBtn" aria-label="Post to X" title="Post to X">${xIcon}</button>
-    </div>`
+    ? `<button class="btn btn-ghost" id="sendResultBtn">Send Back Result</button>`
     : `
-    <div class="share-action">
-      <button class="btn btn-ghost" id="shareResultsBtn">Share Results</button>
-      <button class="share-x-btn" id="shareResultsXBtn" aria-label="Post to X" title="Post to X">${xIcon}</button>
-    </div>
-    <div class="share-action">
-      <button class="btn btn-ghost" id="challengeBtn">Challenge a Friend</button>
-      <button class="share-x-btn" id="challengeXBtn" aria-label="Post to X" title="Post to X">${xIcon}</button>
-    </div>
+    <button class="btn btn-ghost" id="shareResultsBtn">Share Results</button>
+    <button class="btn btn-ghost" id="challengeBtn">Challenge a Friend</button>
   `;
   card.appendChild(shareRow);
 
@@ -1935,32 +1997,14 @@ function screenEnd() {
   card.appendChild(shareStatus);
 
   if (state.isReplay) {
-    shareRow.querySelector("#sendResultBtn").addEventListener("click", () => {
-      const { text, url } = sendResultPayload();
-      shareContent(text, url, shareStatus);
-    });
-    shareRow.querySelector("#sendResultXBtn").addEventListener("click", () => {
-      const { text, url } = sendResultPayload();
-      postToX(text, url);
-    });
+    const btn = shareRow.querySelector("#sendResultBtn");
+    btn.addEventListener("click", () => openSharePopover(btn, sendResultPayload, shareStatus));
   } else {
-    shareRow.querySelector("#shareResultsBtn").addEventListener("click", () => {
-      const { text, url } = shareResultsPayload();
-      shareContent(text, url, shareStatus);
-    });
-    shareRow.querySelector("#shareResultsXBtn").addEventListener("click", () => {
-      const { text, url } = shareResultsPayload();
-      postToX(text, url);
-    });
+    const shareBtn = shareRow.querySelector("#shareResultsBtn");
+    shareBtn.addEventListener("click", () => openSharePopover(shareBtn, shareResultsPayload, shareStatus));
 
-    shareRow.querySelector("#challengeBtn").addEventListener("click", () => {
-      const { text, url } = challengePayload();
-      shareContent(text, url, shareStatus);
-    });
-    shareRow.querySelector("#challengeXBtn").addEventListener("click", () => {
-      const { text, url } = challengePayload();
-      postToX(text, url);
-    });
+    const challengeBtn = shareRow.querySelector("#challengeBtn");
+    challengeBtn.addEventListener("click", () => openSharePopover(challengeBtn, challengePayload, shareStatus));
   }
 
   const again = document.createElement("button");
