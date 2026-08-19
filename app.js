@@ -176,6 +176,7 @@ function freshState() {
     showTermsOfUse: false,
     isReplay: false,
     replayQueue: null,
+    resultsQueue: null,
     replayLinkExpired: false,
     current: {
       topic: null,
@@ -519,35 +520,21 @@ const REPLAY_STAT_CODES_REV = Object.fromEntries(Object.entries(REPLAY_STAT_CODE
 const REPLAY_DIFFICULTY_CODES = { easy: "e", medium: "m", hard: "h" };
 const REPLAY_DIFFICULTY_CODES_REV = Object.fromEntries(Object.entries(REPLAY_DIFFICULTY_CODES).map(([k, v]) => [v, k]));
 
-// Every round also carries the challenger's wager and point delta for that
-// round (as trailing fields, since "-" is already the separator between
-// rounds) - that's what lets a friend's playthrough show a live "you vs
-// them" scoreboard after each question, and a full wager-by-wager breakdown
-// at the end, instead of only a final total.
-function encodeRoundSpec(spec) {
+// Topic-identity fields only (no scoring data) - shared by both the
+// single-sided challenge format below and the two-sided results format
+// further down, so the per-topic field layout only has to be defined once.
+function coreFieldsForSpec(spec) {
   const tc = REPLAY_TOPIC_CODES[spec.t];
-  let core;
   if (spec.t === "thisOrThat") {
-    const sc = REPLAY_STAT_CODES[spec.s];
-    core = [tc, sc, spec.i, spec.f];
-  } else if (spec.t === "fillBlank" || spec.t === "lineups") {
-    core = [tc, spec.i, spec.b];
-  } else {
-    core = [tc, spec.i];
+    return [tc, REPLAY_STAT_CODES[spec.s], spec.i, spec.f];
   }
-  const deltaSign = spec.delta < 0 ? 1 : 0;
-  return [...core, deltaSign, Math.abs(spec.delta), spec.wager].join(".");
+  if (spec.t === "fillBlank" || spec.t === "lineups") {
+    return [tc, spec.i, spec.b];
+  }
+  return [tc, spec.i];
 }
 
-function parseRoundSpec(str) {
-  const parts = str.split(".");
-  const wager = Number(parts[parts.length - 1]);
-  const deltaAbs = Number(parts[parts.length - 2]);
-  const deltaSign = Number(parts[parts.length - 3]);
-  if (Number.isNaN(wager) || Number.isNaN(deltaSign) || Number.isNaN(deltaAbs)) return null;
-  const delta = deltaSign ? -deltaAbs : deltaAbs;
-  const core = parts.slice(0, -3);
-
+function parseCoreFields(core) {
   const topic = REPLAY_TOPIC_CODES_REV[core[0]];
   if (!topic) return null;
   if (topic === "thisOrThat") {
@@ -555,16 +542,50 @@ function parseRoundSpec(str) {
     const idx = Number(core[2]);
     const flip = Number(core[3]);
     if (!statKey || Number.isNaN(idx) || Number.isNaN(flip)) return null;
-    return { t: topic, s: statKey, i: idx, f: flip, delta, wager };
+    return { t: topic, s: statKey, i: idx, f: flip };
   }
   if (topic === "fillBlank" || topic === "lineups") {
     const id = Number(core[1]);
     const blankIndex = Number(core[2]);
     if (Number.isNaN(id) || Number.isNaN(blankIndex)) return null;
-    return { t: topic, i: id, b: blankIndex, delta, wager };
+    return { t: topic, i: id, b: blankIndex };
   }
   const id = Number(core[1]);
-  return Number.isNaN(id) ? null : { t: topic, i: id, delta, wager };
+  return Number.isNaN(id) ? null : { t: topic, i: id };
+}
+
+// "none" is a reserved token for "timed out, no answer" - safe because it
+// can never collide with a real encoded value (player IDs always end in
+// digits, jersey/college/this-or-that values are always plain numbers).
+function encodeGuessedToken(guessed) {
+  return guessed === null || guessed === undefined ? "none" : guessed;
+}
+function decodeGuessedToken(token) {
+  return token === "none" ? null : token;
+}
+
+// Every round also carries the challenger's wager, point delta, and raw
+// guessed answer for that round (as trailing fields, since "-" is already
+// the separator between rounds) - that's what lets a friend's playthrough
+// show a live "you vs them" scoreboard after each question, what they
+// actually guessed alongside their own answer, and a full breakdown at the
+// end instead of only a final total.
+function encodeRoundSpec(spec) {
+  const core = coreFieldsForSpec(spec);
+  const deltaSign = spec.delta < 0 ? 1 : 0;
+  return [...core, deltaSign, Math.abs(spec.delta), spec.wager, encodeGuessedToken(spec.guessed)].join(".");
+}
+
+function parseRoundSpec(str) {
+  const parts = str.split(".");
+  const guessed = decodeGuessedToken(parts[parts.length - 1]);
+  const wager = Number(parts[parts.length - 2]);
+  const deltaAbs = Number(parts[parts.length - 3]);
+  const deltaSign = Number(parts[parts.length - 4]);
+  if (Number.isNaN(wager) || Number.isNaN(deltaSign) || Number.isNaN(deltaAbs)) return null;
+  const core = parseCoreFields(parts.slice(0, -4));
+  if (!core) return null;
+  return { ...core, delta: deltaSign ? -deltaAbs : deltaAbs, wager, guessed };
 }
 
 function encodeReplayCode(specs, difficulty) {
@@ -577,6 +598,53 @@ function decodeReplayCode(code) {
     const difficulty = REPLAY_DIFFICULTY_CODES_REV[segments[0]];
     if (!difficulty) return null;
     const q = segments.slice(1).map(parseRoundSpec);
+    if (q.length === 0 || q.some((s) => s === null)) return null;
+    return { d: difficulty, q };
+  } catch {
+    return null;
+  }
+}
+
+// "Final Results" links (built by Send Back Result) carry BOTH sides' data
+// per round instead of one - the challenger's (the person who sent the
+// original challenge) and the opponent's (whoever just finished it). Using
+// role names instead of "you"/"them" matters here specifically because
+// this link can be opened by a third party who is neither - "you/them" has
+// no stable meaning once it's not the same person who built the link.
+function encodeResultRoundSpec(spec) {
+  const core = coreFieldsForSpec(spec);
+  const side = (s) => [s.delta < 0 ? 1 : 0, Math.abs(s.delta), s.wager, encodeGuessedToken(s.guessed)];
+  return [...core, ...side(spec.challenger), ...side(spec.opponent)].join(".");
+}
+
+function parseResultRoundSpec(str) {
+  const parts = str.split(".");
+  if (parts.length < 8) return null;
+  const parseSide = ([deltaSignStr, deltaAbsStr, wagerStr, guessedToken]) => {
+    const deltaSign = Number(deltaSignStr);
+    const deltaAbs = Number(deltaAbsStr);
+    const wager = Number(wagerStr);
+    if (Number.isNaN(deltaSign) || Number.isNaN(deltaAbs) || Number.isNaN(wager)) return null;
+    return { delta: deltaSign ? -deltaAbs : deltaAbs, wager, guessed: decodeGuessedToken(guessedToken) };
+  };
+  const opponent = parseSide(parts.slice(-4));
+  const challenger = parseSide(parts.slice(-8, -4));
+  if (!opponent || !challenger) return null;
+  const core = parseCoreFields(parts.slice(0, -8));
+  if (!core) return null;
+  return { ...core, challenger, opponent };
+}
+
+function encodeResultsCode(specs, difficulty) {
+  return [REPLAY_DIFFICULTY_CODES[difficulty], ...specs.map(encodeResultRoundSpec)].join("-");
+}
+
+function decodeResultsCode(code) {
+  try {
+    const segments = code.split("-");
+    const difficulty = REPLAY_DIFFICULTY_CODES_REV[segments[0]];
+    if (!difficulty) return null;
+    const q = segments.slice(1).map(parseResultRoundSpec);
     if (q.length === 0 || q.some((s) => s === null)) return null;
     return { d: difficulty, q };
   } catch {
@@ -673,6 +741,20 @@ function correctAnswerName(topic, q) {
   if (topic === "lineups") return q.answerName;
   if (topic === "jerseyNumbers") return String(q.answerNumber);
   return q.name;
+}
+
+// Resolves a compact "guessedRaw" value (as carried in a Challenge or Final
+// Results link) back into display text - the inverse of how it's encoded at
+// submit time: player ID -> name, college index -> name, jersey number ->
+// string, this-or-that side -> that side's player name. `q` is the
+// reconstructed question for this round (from pickQuestionFromSpec), needed
+// for this-or-that since the two names aren't looked up elsewhere.
+function resolveGuessedDisplay(topic, guessedRaw, q) {
+  if (guessedRaw === null || guessedRaw === undefined) return "(ran out of time)";
+  if (topic === "college") return collegesSearch[Number(guessedRaw)] ?? "Unknown";
+  if (topic === "jerseyNumbers") return String(guessedRaw);
+  if (topic === "thisOrThat") return q.pair[Number(guessedRaw)]?.name ?? "Unknown";
+  return playersSearch.find((p) => p.id === guessedRaw)?.name ?? "Unknown";
 }
 
 function isCorrectGuess(topic, q, selectedId) {
@@ -945,6 +1027,7 @@ function renderScreen() {
     case "question": return screenQuestion();
     case "result": return screenResult();
     case "end": return screenEnd();
+    case "resultsView": return screenResultsView();
     default: return document.createElement("div");
   }
 }
@@ -1278,6 +1361,7 @@ function screenQuestion() {
       delta,
       answer: correctAnswerName(topic, q),
       guessed: "(ran out of time)",
+      guessedRaw: null,
       spec: questionReplaySpec(topic, q),
     });
     stopTimer();
@@ -1364,6 +1448,15 @@ function screenQuestion() {
           : topic === "jerseyNumbers"
           ? state.current.selectedNumber
           : state.current.selectedPlayer.name,
+      // raw, encodable form of the same guess (an index/number/ID rather
+      // than display text) - what actually rides along in a Challenge or
+      // Final Results link, since arbitrary text isn't safe to embed there
+      guessedRaw:
+        topic === "college"
+          ? collegesSearch.indexOf(state.current.selectedCollege)
+          : topic === "jerseyNumbers"
+          ? Number(state.current.selectedNumber)
+          : guessed,
       spec: questionReplaySpec(topic, q),
     });
     stopTimer();
@@ -1610,6 +1703,8 @@ function screenThisOrThat() {
         correct: false,
         delta,
         statLabel: q.statLabel,
+        guessed: "(ran out of time)",
+        guessedRaw: null,
         spec: questionReplaySpec(topic, q),
       });
       stopTimer();
@@ -1698,6 +1793,8 @@ function screenThisOrThat() {
         correct,
         delta,
         statLabel: q.statLabel,
+        guessed: q.pair[state.current.totSelection]?.name,
+        guessedRaw: state.current.totSelection,
         spec: questionReplaySpec(topic, q),
       });
       state.screen = "result";
@@ -1933,17 +2030,22 @@ function screenEnd() {
     ? state.history
         .map((h, i) => {
           const theirs = state.replayQueue[i];
-          const side = (who, wager, delta) => `
+          const theirQ = pickQuestionFromSpec(theirs);
+          const theirGuess = resolveGuessedDisplay(h.topic, theirs.guessed, theirQ);
+          const side = (who, wager, delta, guessText) => `
             <div class="rrr-side">
-              <span class="rrr-who">${who}</span>
-              <span class="rrr-wager">wagered ${wager}</span>
-              <span class="rrr-delta ${delta >= 0 ? "score-positive" : "score-negative"}">${delta > 0 ? "+" : ""}${delta}</span>
+              <div class="rrr-side-main">
+                <span class="rrr-who">${who}</span>
+                <span class="rrr-wager">wagered ${wager}</span>
+                <span class="rrr-delta ${delta >= 0 ? "score-positive" : "score-negative"}">${delta > 0 ? "+" : ""}${delta}</span>
+              </div>
+              <div class="rrr-guess">${guessText}</div>
             </div>`;
           return `
           <div class="round-row-replay">
             <div class="rrr-topic">#${i + 1} · ${TOPIC_META[h.topic].title}</div>
-            ${side("You", h.wager, h.delta)}
-            ${side("Them", theirs.wager, theirs.delta)}
+            ${side("You", h.wager, h.delta, h.guessed)}
+            ${side("Them", theirs.wager, theirs.delta, theirGuess)}
           </div>`;
         })
         .join("")
@@ -1965,25 +2067,38 @@ function screenEnd() {
   // button and its dedicated "post to X" icon button send the same content
   const sendResultPayload = () => {
     const originalText = `${originalTotal > 0 ? "+" : ""}${originalTotal}`;
+    // the challenger's already-decoded per-round data (wager/delta/guessed)
+    // rides along in state.replayQueue since the challenge link carried it -
+    // combine it with this playthrough's own state.history to build a link
+    // that shows the complete round-by-round breakdown to whoever opens it,
+    // with no gameplay required on their end
+    const specs = state.history.map((h, i) => ({
+      ...h.spec,
+      challenger: { delta: state.replayQueue[i].delta, wager: state.replayQueue[i].wager, guessed: state.replayQueue[i].guessed },
+      opponent: { delta: h.delta, wager: h.wager, guessed: h.guessedRaw },
+    }));
+    const resultsCode = encodeResultsCode(specs, state.difficulty);
+    const resultsUrl = `${siteUrl}?res=${resultsCode}`;
     let text;
     if (state.totalScore > originalTotal) {
-      text = `I beat your Quizzy challenge! Final score: me ${scoreText}, you ${originalText}.`;
+      text = `I beat your Quizzy challenge! Final score: me ${scoreText}, you ${originalText}. Click the link to see the full results.`;
     } else if (state.totalScore < originalTotal) {
-      text = `You got me on your Quizzy challenge. Final score: you ${originalText}, me ${scoreText}.`;
+      text = `You got me on your Quizzy challenge. Final score: you ${originalText}, me ${scoreText}. Click the link to see the full results.`;
     } else {
-      text = `We tied on your Quizzy challenge — we both scored ${scoreText}.`;
+      text = `We tied on your Quizzy challenge — we both scored ${scoreText}. Click the link to see the full results.`;
     }
-    return { text, url: siteUrl };
+    return { text, url: resultsUrl };
   };
   const shareResultsPayload = () => {
     const lines = state.history.map((h) => `${TOPIC_META[h.topic].title}: ${h.delta > 0 ? "+" : ""}${h.delta}`);
     return { text: `My Quizzy score: ${scoreText}\n${lines.join("\n")}`, url: siteUrl };
   };
   const challengePayload = () => {
-    // carry each round's own wager and point delta along with its question
-    // identity, so whoever opens this link can see a live "you vs them"
-    // score as they play and a full wager-by-wager breakdown at the end
-    const specs = state.history.map((h) => ({ ...h.spec, delta: h.delta, wager: h.wager }));
+    // carry each round's own wager, point delta, and guessed answer along
+    // with its question identity, so whoever opens this link can see a live
+    // "you vs them" score as they play, what each side actually guessed,
+    // and a full breakdown at the end
+    const specs = state.history.map((h) => ({ ...h.spec, delta: h.delta, wager: h.wager, guessed: h.guessedRaw }));
     const code = encodeReplayCode(specs, state.difficulty);
     const diffDesc = DIFFICULTY_LEVELS[state.difficulty].description;
     return {
@@ -2033,6 +2148,72 @@ function screenEnd() {
   return card;
 }
 
+// A read-only recap opened from a "Send Back Result" link. Unlike screenEnd
+// (which is always about "your" own just-finished game), whoever opens this
+// link is neither guaranteed to be the original challenger nor the person
+// who played it back - so sides are labeled by role ("Challenger" /
+// "Opponent") instead of "You"/"Them", which would be wrong for a third
+// party or even the challenger themselves (their own data would show up
+// under "Them" from the sender's perspective otherwise).
+function screenResultsView() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `<h2 class="screen-title">Final Results</h2>`;
+  card.appendChild(gameSettingsLine());
+
+  const queue = state.resultsQueue;
+  const challengerTotal = queue.reduce((sum, r) => sum + r.challenger.delta, 0);
+  const opponentTotal = queue.reduce((sum, r) => sum + r.opponent.delta, 0);
+  const outcome = opponentTotal > challengerTotal ? "opponent" : challengerTotal > opponentTotal ? "challenger" : "tied";
+  const outcomeLabel =
+    outcome === "tied" ? "It's a Tie!" : outcome === "opponent" ? "Opponent Won! 🎉" : "Challenger Won! 🎉";
+
+  const banner = document.createElement("div");
+  banner.className = "replay-outcome";
+  banner.innerHTML = `
+    <div class="replay-outcome-title">${outcomeLabel}</div>
+    <div class="replay-outcome-compare">Challenger <strong>${challengerTotal > 0 ? "+" : ""}${challengerTotal}</strong> · Opponent <strong>${opponentTotal > 0 ? "+" : ""}${opponentTotal}</strong></div>
+  `;
+  card.appendChild(banner);
+
+  const history = document.createElement("div");
+  history.className = "round-history";
+  history.innerHTML = queue
+    .map((r, i) => {
+      const q = pickQuestionFromSpec(r);
+      const challengerGuess = resolveGuessedDisplay(r.t, r.challenger.guessed, q);
+      const opponentGuess = resolveGuessedDisplay(r.t, r.opponent.guessed, q);
+      const side = (who, s, guessText) => `
+        <div class="rrr-side">
+          <div class="rrr-side-main">
+            <span class="rrr-who">${who}</span>
+            <span class="rrr-wager">wagered ${s.wager}</span>
+            <span class="rrr-delta ${s.delta >= 0 ? "score-positive" : "score-negative"}">${s.delta > 0 ? "+" : ""}${s.delta}</span>
+          </div>
+          <div class="rrr-guess">${guessText}</div>
+        </div>`;
+      return `
+      <div class="round-row-replay">
+        <div class="rrr-topic">#${i + 1} · ${TOPIC_META[r.t].title}</div>
+        ${side("Challenger", r.challenger, challengerGuess)}
+        ${side("Opponent", r.opponent, opponentGuess)}
+      </div>`;
+    })
+    .join("");
+  card.appendChild(history);
+
+  const playBtn = document.createElement("button");
+  playBtn.className = "btn btn-primary btn-lg";
+  playBtn.textContent = "Play Quizzy Yourself";
+  playBtn.addEventListener("click", () => {
+    state = freshState();
+    render();
+  });
+  card.appendChild(playBtn);
+
+  return card;
+}
+
 // ---------- Boot ----------
 async function loadData() {
   const [d, pc, tot, cq, cs, dq, p, fb, as, tc, tm, lu, jn] = await Promise.all([
@@ -2070,16 +2251,33 @@ function readReplayCodeFromURL() {
   return code ? decodeReplayCode(code) : null;
 }
 
+function readResultsCodeFromURL() {
+  const code = new URLSearchParams(location.search).get("res");
+  return code ? decodeResultsCode(code) : null;
+}
+
 // Question data can get rebuilt/rebalanced over time (new topic, a bug fix
 // like the decade-boundary one, etc.), which can shift or drop the IDs an
-// older Challenge link points to. Rather than silently landing on the
-// normal start screen with no explanation (confusing - looks like the link
-// just did nothing), a link that can't be fully resolved shows a banner
-// explaining it's expired instead.
-const pendingReplay = readReplayCodeFromURL();
+// older Challenge/Results link points to. Rather than silently landing on
+// the normal start screen with no explanation (confusing - looks like the
+// link just did nothing), a link that can't be fully resolved shows a
+// banner explaining it's expired instead.
+const pendingResults = readResultsCodeFromURL();
+const pendingReplay = pendingResults ? null : readReplayCodeFromURL();
 
 loadData().then(() => {
-  if (pendingReplay) {
+  if (pendingResults) {
+    const resolvable = pendingResults.q.every((spec) => pickQuestionFromSpec(spec) !== null);
+    if (resolvable) {
+      state.resultsQueue = pendingResults.q;
+      state.difficulty = pendingResults.d;
+      state.gameLength = pendingResults.q.length;
+      state.showWelcome = false;
+      state.screen = "resultsView";
+    } else {
+      state.replayLinkExpired = true;
+    }
+  } else if (pendingReplay) {
     const resolvable = pendingReplay.q.every((spec) => pickQuestionFromSpec(spec) !== null);
     if (resolvable) {
       state.isReplay = true;

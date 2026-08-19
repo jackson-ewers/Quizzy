@@ -684,12 +684,22 @@ button {
 .rrr-topic { color: var(--text-secondary); font-size: 13px; }
 .rrr-side {
   display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.rrr-side-main {
+  display: flex;
   align-items: center;
   gap: 8px;
 }
-.rrr-who { font-weight: 700; width: 40px; flex-shrink: 0; }
+.rrr-who { font-weight: 700; width: 74px; flex-shrink: 0; }
 .rrr-wager { color: var(--text-secondary); flex: 1; }
 .rrr-delta { font-weight: 700; }
+.rrr-guess {
+  padding-left: 82px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
 
 .replay-scorecard {
   width: 100%;
