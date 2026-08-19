@@ -34,6 +34,7 @@ OUT.mkdir(exist_ok=True)
 MULTI_TEAM_CODES = {"2TM", "3TM", "4TM", "5TM", ""}
 MIN_CAREER_GAMES = 300
 MIN_CAREER_SEASONS = 10  # Player Career category: only players with a decently long career
+MIN_AWARD_SEASONS = 3  # ...and a real track record, not just one honor in an otherwise quiet career
 
 STATS = [
     ("mp", "Total Minutes Played", 1951),
@@ -411,8 +412,8 @@ def main():
         total_games = sum(s["g"] for _, s in seasons)
         if total_games < MIN_CAREER_GAMES:
             continue
-        has_any_award = any(awards_by_season.get((pid, season), "") for season, _ in seasons)
-        if not has_any_award:
+        award_season_count = sum(1 for season, _ in seasons if awards_by_season.get((pid, season), ""))
+        if award_season_count < MIN_AWARD_SEASONS:
             continue
         seasons.sort(key=lambda kv: kv[0])
         qid += 1
