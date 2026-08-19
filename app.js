@@ -150,8 +150,8 @@ const QUESTION_TIME_SECONDS = 60;
 function freshState() {
   return {
     screen: "start",
-    gameLength: 5,
-    difficulty: "medium",
+    gameLength: null,
+    difficulty: null,
     totalScore: 0,
     usedWagers: new Set(),
     round: 0,
@@ -174,6 +174,7 @@ function freshState() {
     showWelcome: false,
     showPrivacyPolicy: false,
     showTermsOfUse: false,
+    showStartValidation: false,
     isReplay: false,
     replayQueue: null,
     resultsQueue: null,
@@ -794,6 +795,9 @@ function render() {
   if (state.showTermsOfUse) {
     app.appendChild(renderTermsOfUseModal());
   }
+  if (state.showStartValidation) {
+    app.appendChild(renderStartValidationModal());
+  }
   if (state.current.pendingHint) {
     app.appendChild(renderHintConfirmModal());
   }
@@ -819,6 +823,31 @@ function renderWelcomeModal() {
     if (e.target === overlay) close();
   });
   overlay.querySelector("#closeWelcomeX").addEventListener("click", close);
+  return overlay;
+}
+
+function renderStartValidationModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <button class="modal-close-btn" id="closeStartValidationX" aria-label="Close">&times;</button>
+      <h2 class="screen-title">Almost There!</h2>
+      <div class="modal-body" style="text-align:center;">
+        <p>You must first choose your question count and quiz difficulty before you can start.</p>
+      </div>
+      <button class="btn btn-primary btn-lg" id="closeStartValidation">Got It</button>
+    </div>
+  `;
+  const close = () => {
+    state.showStartValidation = false;
+    render();
+  };
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.querySelector("#closeStartValidationX").addEventListener("click", close);
+  overlay.querySelector("#closeStartValidation").addEventListener("click", close);
   return overlay;
 }
 
@@ -1066,7 +1095,7 @@ function screenStart() {
         )
         .join("")}
     </div>
-    <button class="btn btn-primary btn-lg" id="startBtn">Start Game</button>
+    <button class="btn btn-primary btn-lg ${!state.gameLength || !state.difficulty ? "btn-look-disabled" : ""}" id="startBtn">Start Game</button>
   `;
   card.querySelectorAll(".length-card[data-len]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1080,7 +1109,15 @@ function screenStart() {
       render();
     });
   });
+  // Not a real disabled button - stays clickable so a tap before both
+  // choices are made can explain what's missing, instead of just doing
+  // nothing and leaving the user unsure why.
   card.querySelector("#startBtn").addEventListener("click", () => {
+    if (!state.gameLength || !state.difficulty) {
+      state.showStartValidation = true;
+      render();
+      return;
+    }
     state.screen = "wheel";
     render();
   });

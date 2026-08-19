@@ -208,6 +208,10 @@ button {
 }
 .btn:active { transform: translateY(0) scale(0.97); }
 .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; box-shadow: none; }
+/* Same look as :disabled, but the button stays clickable underneath - for
+   cases like Start Game where a click while "incomplete" should still fire
+   and explain what's missing, rather than doing nothing at all. */
+.btn-look-disabled { opacity: 0.35; box-shadow: none; }
 
 .btn-primary {
   background: linear-gradient(135deg, var(--accent), #ff8c5a);
