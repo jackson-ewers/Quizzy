@@ -891,11 +891,23 @@ function renderHowToPlayModal() {
 function statusBar() {
   const div = document.createElement("div");
   div.className = "status-bar";
+  const diff = DIFFICULTY_LEVELS[state.difficulty];
   div.innerHTML = `
     <div class="status-pill">Round <strong>${state.round + 1}</strong> / ${state.gameLength}</div>
+    <div class="status-pill" title="${diff.description}">${diff.label}</div>
     <div class="status-pill">Left: <strong>${availableWagers().join(", ") || "—"}</strong></div>
   `;
   return div;
+}
+
+// Shown on screens that don't already have the full status-bar (Round X/Y
+// implies question count there) - the wheel and end screens still get a
+// quiet reminder of the settings this game is being played at.
+function gameSettingsLine() {
+  const p = document.createElement("p");
+  p.className = "tagline game-settings-line";
+  p.textContent = `${DIFFICULTY_LEVELS[state.difficulty].label} · ${state.gameLength} Questions`;
+  return p;
 }
 
 function scoreBadge() {
@@ -1048,6 +1060,7 @@ function screenWheel() {
 
   card.innerHTML = `
     <h2 class="screen-title">Spin for your topic</h2>
+    <p class="tagline game-settings-line">${DIFFICULTY_LEVELS[state.difficulty].label} · ${state.gameLength} Questions</p>
     ${state.isReplay ? `<p class="tagline">🎯 Playing a friend's exact quiz</p>` : ""}
     <div class="wheel-stage">
       <div class="wheel-pointer"></div>
@@ -1890,6 +1903,7 @@ function screenEnd() {
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `<h2 class="screen-title">Game Over</h2>`;
+  card.appendChild(gameSettingsLine());
 
   const scoreEl = document.createElement("div");
   scoreEl.className = "final-score";

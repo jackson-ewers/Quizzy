@@ -133,6 +133,14 @@ h1.brand {
   text-align: center;
 }
 
+.game-settings-line {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.65;
+}
+
 .brand-dots {
   display: flex;
   align-items: center;
