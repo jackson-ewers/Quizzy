@@ -32,9 +32,11 @@ OUT = Path(__file__).resolve().parent / "data"
 OUT.mkdir(exist_ok=True)
 
 MULTI_TEAM_CODES = {"2TM", "3TM", "4TM", "5TM", ""}
-MIN_CAREER_GAMES = 300
+MIN_CAREER_GAMES = 300  # shared "long enough career" floor - Fill in the Blank's all-time per-game boards use this too
 MIN_CAREER_SEASONS = 10  # Player Career category: only players with a decently long career
-MIN_AWARD_SEASONS = 3  # ...and a real track record, not just one honor in an otherwise quiet career
+MIN_AWARD_SEASONS = 1  # ...with at least one season carrying some kind of individual honor
+MIN_PLAYER_CAREER_GAMES = 500  # Player Career's own games floor - kept separate from MIN_CAREER_GAMES so
+# raising it doesn't also raise Fill in the Blank's unrelated all-time per-game threshold
 
 STATS = [
     ("mp", "Total Minutes Played", 1951),
@@ -410,7 +412,7 @@ def main():
         if len(seasons) < MIN_CAREER_SEASONS:
             continue
         total_games = sum(s["g"] for _, s in seasons)
-        if total_games < MIN_CAREER_GAMES:
+        if total_games < MIN_PLAYER_CAREER_GAMES:
             continue
         award_season_count = sum(1 for season, _ in seasons if awards_by_season.get((pid, season), ""))
         if award_season_count < MIN_AWARD_SEASONS:
