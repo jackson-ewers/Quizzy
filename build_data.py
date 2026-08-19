@@ -856,7 +856,13 @@ def main():
                 "fromYear": p["from"],
                 "toYear": p["to"],
                 "years": f"{p['from']}–{p['to']}",
-                "team": ", ".join(team_names[t] for t in trophy_career_teams[pid]),
+                # franchise IDs, not full names (e.g. "WAS" not "Washington
+                # Wizards") - defunct franchises with no active mapping fall
+                # back to their own historical team code, which is already a
+                # short ID
+                "team": ", ".join(
+                    dict.fromkeys(franchise_id_by_team.get(t, t) for t in trophy_career_teams[pid])
+                ),
             }
         )
     with open(OUT / "trophy_case_questions.json", "w", encoding="utf-8") as f:

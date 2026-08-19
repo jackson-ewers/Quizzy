@@ -103,11 +103,11 @@ const HINTS = {
   ],
   trophyCase: [
     { key: "years", label: "Years Active", value: (q) => q.years },
-    { key: "team", label: "Teams", value: (q) => q.team },
+    { key: "team", label: "Franchise ID", value: (q) => q.team },
   ],
   teammates: [
     { key: "pos", label: "Teammate's Position", value: (q) => q.pos },
-    { key: "team", label: "Team(s) Together", value: (q) => q.team },
+    { key: "team", label: "Teams Together", value: (q) => q.team },
   ],
   lineups: [
     { key: "pos", label: "Position (that season)", value: (q) => q.pos },
@@ -125,9 +125,9 @@ const HINTS = {
 // showing, or a career-long player can look like they only ever played for
 // whatever team(s) they happened to be on for that one season/decade.
 function fillBlankTeamHintLabel(q) {
-  if (q.format === "allTime") return "Team(s) (Full Career)";
-  if (q.format === "decade") return "Team(s) That Decade";
-  return "Team(s) That Season";
+  if (q.format === "allTime") return "Teams (Full Career)";
+  if (q.format === "decade") return "Teams That Decade";
+  return "Teams That Season";
 }
 
 // This or That hints depend on which stat got picked - most stats hint at
