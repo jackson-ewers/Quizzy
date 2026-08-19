@@ -95,7 +95,7 @@ const HINTS = {
   ],
   fillBlank: [
     { key: "pos", label: "Position", value: (q) => q.pos },
-    { key: "team", label: "Team(s)", value: (q) => q.team },
+    { key: "team", label: (q) => fillBlankTeamHintLabel(q), value: (q) => q.team },
   ],
   awardsSeason: [
     { key: "pos", label: "Position", value: (q) => q.pos },
@@ -118,6 +118,17 @@ const HINTS = {
     { key: "overUnder", label: "Over/Under", value: (q) => q.overUnderHint },
   ],
 };
+
+// Fill in the Blank boards come in 4 time-frame formats (season, decade,
+// all-time, and All-NBA/All-Defensive team rosters, which are season-scoped
+// like a plain season board). The "team(s)" hint has to say which one it's
+// showing, or a career-long player can look like they only ever played for
+// whatever team(s) they happened to be on for that one season/decade.
+function fillBlankTeamHintLabel(q) {
+  if (q.format === "allTime") return "Team(s) (Full Career)";
+  if (q.format === "decade") return "Team(s) That Decade";
+  return "Team(s) That Season";
+}
 
 // This or That hints depend on which stat got picked - most stats hint at
 // career games/MPG, but the Career-High Points stat hints at career PPG and
@@ -1320,13 +1331,14 @@ function renderHintRow(topic, q, hintDefs, revealedTextFor) {
   hintDefs.forEach((hint) => {
     const btn = document.createElement("button");
     const revealed = state.current.hintsRevealed.includes(hint.key);
+    const labelText = typeof hint.label === "function" ? hint.label(q) : hint.label;
     btn.className = "hint-btn" + (revealed ? " revealed" : "");
     const valueText = revealed ? revealedTextFor(hint, q) : "Tap to reveal";
-    btn.innerHTML = `<span class="hint-label">${hint.label}</span><span class="hint-value">${valueText}</span>`;
+    btn.innerHTML = `<span class="hint-label">${labelText}</span><span class="hint-value">${valueText}</span>`;
     btn.disabled = revealed;
     btn.addEventListener("click", () => {
       if (revealed) return;
-      state.current.pendingHint = { topic, key: hint.key, label: hint.label };
+      state.current.pendingHint = { topic, key: hint.key, label: labelText };
       render();
     });
     hintRow.appendChild(btn);
