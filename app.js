@@ -103,7 +103,7 @@ const HINTS = {
   ],
   trophyCase: [
     { key: "years", label: "Years Active", value: (q) => q.years },
-    { key: "team", label: "Franchise ID", value: (q) => q.team },
+    { key: "team", label: "Franchise", value: (q) => q.team },
   ],
   teammates: [
     { key: "pos", label: "Teammate's Position", value: (q) => q.pos },
