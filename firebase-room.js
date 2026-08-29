@@ -17,7 +17,12 @@ import {
   increment,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import {
+  getAuth,
+  signInAnonymously,
+  setPersistence,
+  browserSessionPersistence,
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L - read aloud & typed on phones
 const ROOM_CODE_LENGTH = 5;
@@ -30,7 +35,13 @@ window.QuizzyRoom = QuizzyRoom;
 
 let db = null;
 let auth = null;
-let uid = null;
+
+// Always read the live signed-in uid rather than caching it once - it costs
+// nothing and closes off a whole class of staleness bugs if the session ever
+// changes underneath us.
+function currentUid() {
+  return auth.currentUser.uid;
+}
 
 function generateRoomCode() {
   let code = "";
@@ -42,6 +53,7 @@ function generateRoomCode() {
 QuizzyRoom.generateRoomCode = generateRoomCode;
 
 async function createRoom({ hostName, difficulty, gameLength, specs }) {
+  const uid = currentUid();
   // small retry loop in case of a code collision - vanishingly unlikely at
   // this alphabet/length, but cheap to guard against
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -80,6 +92,7 @@ async function peekRoom(code) {
 QuizzyRoom.peekRoom = peekRoom;
 
 async function joinRoom({ code, name }) {
+  const uid = currentUid();
   const room = await peekRoom(code);
   if (!room) return { error: "not_found" };
   if (room.status !== "lobby") return { error: "in_progress" };
@@ -132,8 +145,14 @@ QuizzyRoom.submitRoundResult = submitRoundResult;
     const app = initializeApp(firebaseConfig);
     db = getFirestore(app);
     auth = getAuth(app);
-    const cred = await signInAnonymously(auth);
-    uid = cred.user.uid;
+    // Session-scoped, not the Firebase default (local/IndexedDB) - a room
+    // identity has no reason to persist across tabs or browser restarts (we
+    // don't support resuming a room after a refresh anyway), and local
+    // persistence would otherwise silently merge every tab of this origin
+    // into one shared anonymous identity, e.g. two tabs open on the same
+    // computer would collide as "the same player" in a room.
+    await setPersistence(auth, browserSessionPersistence);
+    await signInAnonymously(auth);
     QuizzyRoom.isReady = true;
   } catch (err) {
     // Firebase not configured yet, CDN blocked, offline, etc. - multiplayer
