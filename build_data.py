@@ -1382,13 +1382,14 @@ def main():
                     )
 
     # -- All-NBA / All-Defensive team roster boards --
-    # e.g. "2015 2nd Team All-NBA" - no stat value, just the 5-player roster for
+    # e.g. "2015 1st Team All-NBA" - no stat value, just the 5-player roster for
     # that team/season, with the same position/team-that-season hints as any
-    # other season-scope board.
+    # other season-scope board. 1st Team only - 2nd/3rd Team rosters are much
+    # less recognizable and make for weaker fill-in-the-blank boards.
     TEAM_ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
     team_award_rows = con.execute(
         "SELECT player_id, award_type, season, team_number FROM player_accolades "
-        "WHERE award_type IN ('All-NBA', 'All-Defensive') AND team_number IS NOT NULL"
+        "WHERE award_type IN ('All-NBA', 'All-Defensive') AND team_number = 1"
     ).fetchall()
     team_rosters = defaultdict(list)  # (award_type, season, team_number) -> [player_id, ...]
     for r in team_award_rows:

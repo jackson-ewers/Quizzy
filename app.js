@@ -752,6 +752,7 @@ function correctAnswerName(topic, q) {
   if (topic === "teammates") return q.answerName;
   if (topic === "lineups") return q.answerName;
   if (topic === "jerseyNumbers") return String(q.answerNumber);
+  if (topic === "thisOrThat") return q.pair[0].value >= q.pair[1].value ? q.pair[0].name : q.pair[1].name;
   return q.name;
 }
 
@@ -1752,6 +1753,7 @@ function screenThisOrThat() {
         correct: false,
         delta,
         statLabel: q.statLabel,
+        answer: correctAnswerName(topic, q),
         guessed: "(ran out of time)",
         guessedRaw: null,
         spec: questionReplaySpec(topic, q),
@@ -1842,6 +1844,7 @@ function screenThisOrThat() {
         correct,
         delta,
         statLabel: q.statLabel,
+        answer: correctAnswerName(topic, q),
         guessed: q.pair[state.current.totSelection]?.name,
         guessedRaw: state.current.totSelection,
         spec: questionReplaySpec(topic, q),
@@ -1976,7 +1979,7 @@ function closeSharePopover() {
 // One button, one small menu - covers "post to X directly" plus "anywhere
 // else" (native share sheet for installed apps, or a copied link that works
 // literally anywhere) without needing a second button on-screen per action.
-function openSharePopover(anchorBtn, getPayload, statusEl) {
+function openSharePopover(anchorBtn, getPayload, statusEl, copyLabel = "Copy Link") {
   closeSharePopover();
   const { text, url } = getPayload();
 
@@ -1992,7 +1995,7 @@ function openSharePopover(anchorBtn, getPayload, statusEl) {
     </button>
     <button class="share-popover-item" id="sharePopCopy">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-      Copy Link
+      ${copyLabel}
     </button>
     ${
       navigator.share
@@ -2037,6 +2040,13 @@ function openSharePopover(anchorBtn, getPayload, statusEl) {
   // count as an "outside click" and close it again
   setTimeout(() => {
     document.addEventListener("click", function onDocClick(e) {
+      // this popover may have already been replaced by a newer one (e.g. the
+      // same click that's bubbling here also opened a different share
+      // button's popover) - bail out instead of nuking that newer popover
+      if (!document.body.contains(pop)) {
+        document.removeEventListener("click", onDocClick);
+        return;
+      }
       if (!pop.contains(e.target) && e.target !== anchorBtn) {
         closeSharePopover();
         document.removeEventListener("click", onDocClick);
@@ -2102,8 +2112,11 @@ function screenEnd() {
         .map(
           (h, i) => `
       <div class="round-row">
-        <span class="rr-topic">#${i + 1} · ${TOPIC_META[h.topic].title} · wagered ${h.wager}</span>
-        <span class="rr-delta ${h.delta >= 0 ? "score-positive" : "score-negative"}">${h.delta > 0 ? "+" : ""}${h.delta}</span>
+        <div class="rr-main">
+          <span class="rr-topic">#${i + 1} · ${TOPIC_META[h.topic].title} · wagered ${h.wager}</span>
+          <span class="rr-delta ${h.delta >= 0 ? "score-positive" : "score-negative"}">${h.delta > 0 ? "+" : ""}${h.delta}</span>
+        </div>
+        <div class="rr-guess">${h.correct ? `Answer: ${h.answer}` : `Your guess: ${h.guessed} · Answer: ${h.answer}`}</div>
       </div>`
     )
     .join("");
@@ -2179,7 +2192,7 @@ function screenEnd() {
     btn.addEventListener("click", () => openSharePopover(btn, sendResultPayload, shareStatus));
   } else {
     const shareBtn = shareRow.querySelector("#shareResultsBtn");
-    shareBtn.addEventListener("click", () => openSharePopover(shareBtn, shareResultsPayload, shareStatus));
+    shareBtn.addEventListener("click", () => openSharePopover(shareBtn, shareResultsPayload, shareStatus, "Copy Results"));
 
     const challengeBtn = shareRow.querySelector("#challengeBtn");
     challengeBtn.addEventListener("click", () => openSharePopover(challengeBtn, challengePayload, shareStatus));
