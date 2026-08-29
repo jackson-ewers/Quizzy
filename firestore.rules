@@ -1,0 +1,37 @@
+// Paste this into the Firebase console: Firestore Database -> Rules.
+//
+// There's no user-facing login - every client signs in anonymously on load
+// (see firebase-room.js), purely so rules have a stable request.auth.uid to
+// check against. A room code is shared with everyone in the room by design,
+// so it can't be used on its own to tell "you" apart from "another player in
+// the same room" - only request.auth.uid can.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /rooms/{roomCode} {
+      allow read: if true;
+
+      allow create: if request.auth != null
+                    && request.resource.data.hostId == request.auth.uid
+                    && request.resource.data.status == 'lobby';
+
+      // Only the host can update a room, and only its status field (e.g.
+      // lobby -> inProgress) - the question list and settings are fixed at
+      // creation time.
+      allow update: if request.auth != null
+                    && resource.data.hostId == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+
+      match /players/{playerId} {
+        allow read: if true;
+
+        allow create: if request.auth != null && request.auth.uid == playerId;
+
+        // A player can only ever update their own doc, and only their own
+        // progress fields - never another player's score.
+        allow update: if request.auth != null && request.auth.uid == playerId
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['history', 'totalScore', 'finishedAt']);
+      }
+    }
+  }
+}

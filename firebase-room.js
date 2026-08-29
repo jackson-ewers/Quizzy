@@ -1,0 +1,148 @@
+// Shared-room multiplayer backend. This is the only external dependency in
+// the whole project - loaded as its own ES module (index.html) so app.js can
+// stay a plain classic script and just call window.QuizzyRoom.* like any
+// other global, without needing a bundler.
+import { firebaseConfig } from "./firebase-config.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  onSnapshot,
+  collection,
+  query,
+  arrayUnion,
+  increment,
+  serverTimestamp,
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+const ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L - read aloud & typed on phones
+const ROOM_CODE_LENGTH = 5;
+
+const QuizzyRoom = {
+  isReady: false,
+  isUnavailable: false,
+};
+window.QuizzyRoom = QuizzyRoom;
+
+let db = null;
+let auth = null;
+let uid = null;
+
+function generateRoomCode() {
+  let code = "";
+  for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
+    code += ROOM_CODE_ALPHABET[Math.floor(Math.random() * ROOM_CODE_ALPHABET.length)];
+  }
+  return code;
+}
+QuizzyRoom.generateRoomCode = generateRoomCode;
+
+async function createRoom({ hostName, difficulty, gameLength, specs }) {
+  // small retry loop in case of a code collision - vanishingly unlikely at
+  // this alphabet/length, but cheap to guard against
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = generateRoomCode();
+    const roomRef = doc(db, "rooms", code);
+    const existing = await getDoc(roomRef);
+    if (existing.exists()) continue;
+
+    await setDoc(roomRef, {
+      hostId: uid,
+      hostName,
+      difficulty,
+      gameLength,
+      specs,
+      status: "lobby",
+      createdAt: serverTimestamp(),
+    });
+    await setDoc(doc(db, "rooms", code, "players", uid), {
+      name: hostName,
+      isHost: true,
+      history: [],
+      totalScore: 0,
+      joinedAt: serverTimestamp(),
+      finishedAt: null,
+    });
+    return { code, playerId: uid };
+  }
+  throw new Error("Couldn't create a room right now - please try again.");
+}
+QuizzyRoom.createRoom = createRoom;
+
+async function peekRoom(code) {
+  const snap = await getDoc(doc(db, "rooms", code));
+  return snap.exists() ? { code, ...snap.data() } : null;
+}
+QuizzyRoom.peekRoom = peekRoom;
+
+async function joinRoom({ code, name }) {
+  const room = await peekRoom(code);
+  if (!room) return { error: "not_found" };
+  if (room.status !== "lobby") return { error: "in_progress" };
+
+  await setDoc(doc(db, "rooms", code, "players", uid), {
+    name,
+    isHost: false,
+    history: [],
+    totalScore: 0,
+    joinedAt: serverTimestamp(),
+    finishedAt: null,
+  });
+  return { room, playerId: uid };
+}
+QuizzyRoom.joinRoom = joinRoom;
+
+function subscribeRoom(code, { onRoom, onPlayers }) {
+  const unsubRoom = onSnapshot(doc(db, "rooms", code), (snap) => {
+    if (snap.exists()) onRoom({ code, ...snap.data() });
+  });
+  const unsubPlayers = onSnapshot(query(collection(db, "rooms", code, "players")), (snap) => {
+    const players = [];
+    snap.forEach((d) => players.push({ id: d.id, ...d.data() }));
+    onPlayers(players);
+  });
+  return () => {
+    unsubRoom();
+    unsubPlayers();
+  };
+}
+QuizzyRoom.subscribeRoom = subscribeRoom;
+
+async function startRoom(code) {
+  await updateDoc(doc(db, "rooms", code), { status: "inProgress" });
+}
+QuizzyRoom.startRoom = startRoom;
+
+async function submitRoundResult(code, playerId, entry, isLastRound) {
+  const update = {
+    history: arrayUnion(entry),
+    totalScore: increment(entry.delta),
+  };
+  if (isLastRound) update.finishedAt = serverTimestamp();
+  await updateDoc(doc(db, "rooms", code, "players", playerId), update);
+}
+QuizzyRoom.submitRoundResult = submitRoundResult;
+
+(async function init() {
+  try {
+    const app = initializeApp(firebaseConfig);
+    db = getFirestore(app);
+    auth = getAuth(app);
+    const cred = await signInAnonymously(auth);
+    uid = cred.user.uid;
+    QuizzyRoom.isReady = true;
+  } catch (err) {
+    // Firebase not configured yet, CDN blocked, offline, etc. - multiplayer
+    // just stays unavailable rather than throwing into app.js's click handlers.
+    console.warn("Quizzy multiplayer unavailable:", err.message);
+    QuizzyRoom.isUnavailable = true;
+  }
+  // app.js may already have rendered the start screen before this resolves -
+  // this lets it know to re-render once multiplayer is actually usable (or
+  // definitely isn't), without app.js needing to poll for readiness.
+  window.dispatchEvent(new Event("quizzyroomready"));
+})();

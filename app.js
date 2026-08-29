@@ -190,6 +190,11 @@ function freshState() {
     replayQueue: null,
     resultsQueue: null,
     replayLinkExpired: false,
+    room: null,
+    roomJoinError: null,
+    roomJoinPrefillCode: null,
+    roomHostName: "",
+    showStandings: false,
     current: {
       topic: null,
       question: null,
@@ -247,6 +252,45 @@ function stopTimer() {
   clearInterval(timerInterval);
   timerInterval = null;
   timerActiveKey = null;
+}
+
+// ---------- Room subscription ----------
+// render() reruns on every state change (including trivial ones like typing
+// in a form field), so a Firestore listener can't be wired up inline inside a
+// screen function the way DOM event listeners are - it would resubscribe
+// without bound. Guarded the same way the round timer above is: a
+// module-level singleton, keyed by room code, torn down explicitly rather
+// than left to garbage collection.
+let roomUnsubscribe = null;
+let roomSubscribedCode = null;
+
+function ensureRoomSubscription(code) {
+  if (roomSubscribedCode === code) return;
+  teardownRoomSubscription();
+  roomSubscribedCode = code;
+  roomUnsubscribe = window.QuizzyRoom.subscribeRoom(code, {
+    onRoom: (room) => {
+      if (!state.room) return;
+      const wasLobby = state.room.status === "lobby";
+      state.room = { ...state.room, ...room };
+      if (wasLobby && room.status === "inProgress" && state.screen === "roomLobby") {
+        state.round = 0;
+        state.screen = "wheel";
+      }
+      render();
+    },
+    onPlayers: (players) => {
+      if (!state.room) return;
+      state.room.players = players;
+      render();
+    },
+  });
+}
+
+function teardownRoomSubscription() {
+  if (roomUnsubscribe) roomUnsubscribe();
+  roomUnsubscribe = null;
+  roomSubscribedCode = null;
 }
 
 // ---------- Utilities ----------
@@ -513,6 +557,35 @@ function pickQuestionFromSpec(spec) {
   }
 }
 
+// A shared room needs every player to get the identical question sequence,
+// generated once up front by the host rather than picked lazily round by
+// round. Reuses pickQuestion() as-is (it only ever depends on state.difficulty
+// and state.usedQuestionIds[topic], both already set correctly at this point,
+// right after the host picks the room's settings and before anyone - even the
+// host - starts actually playing).
+function generateRoomSpecs(count) {
+  const specs = [];
+  for (let i = 0; i < count; i++) {
+    const topic = TOPIC_ORDER[Math.floor(Math.random() * TOPIC_ORDER.length)];
+    const q = pickQuestion(topic);
+    specs.push(questionReplaySpec(topic, q));
+  }
+  return specs;
+}
+
+// The one shared touch-point between the Challenge-link replay system and
+// rooms: both hand every player the same pre-picked question per round
+// instead of picking randomly. Everything else about the two systems (how
+// scores get compared, what the end screen shows) stays separate - a room's
+// spec entries don't carry a delta/wager the way a replayQueue entry does,
+// since a room's round results only exist once each player actually finishes
+// that round, asynchronously, via Firestore.
+function currentQueueSpec() {
+  if (state.isReplay) return state.replayQueue[state.round];
+  if (state.room) return state.room.specs[state.round];
+  return null;
+}
+
 // Challenge links get pasted into texts/tweets, and real messaging apps turn
 // out to mangle even moderately long query strings - a 5-round game encoded
 // as base64'd JSON (672 characters) got split by iMessage's own link
@@ -671,6 +744,21 @@ function computePayout(wager, hintCount, correct) {
   return correct ? wager * WIN_MULTIPLIER[hintCount] : -(wager * LOSS_MULTIPLIER[hintCount]);
 }
 
+// Pushes the round just added to state.history up to Firestore so other
+// players in the room can see it live. Fire-and-forget - a dropped write here
+// shouldn't block this player's own game from continuing.
+function syncRoomRound() {
+  if (!state.room) return;
+  const h = state.history[state.history.length - 1];
+  const isLastRound = state.history.length >= state.gameLength;
+  window.QuizzyRoom.submitRoundResult(
+    state.room.code,
+    state.room.myPlayerId,
+    { topic: h.topic, wager: h.wager, delta: h.delta, correct: h.correct, guessed: h.guessed, answer: h.answer },
+    isLastRound
+  ).catch(() => {});
+}
+
 // Full stakes table for every hint count, so the user can see the whole
 // risk/reward trade-off up front instead of just the tier they're currently at.
 function renderStakesTable(wager, currentHintCount) {
@@ -812,6 +900,9 @@ function render() {
   }
   if (state.current.pendingHint) {
     app.appendChild(renderHintConfirmModal());
+  }
+  if (state.showStandings) {
+    app.appendChild(renderStandingsModal());
   }
 }
 
@@ -1069,6 +1160,10 @@ function renderScreen() {
     case "result": return screenResult();
     case "end": return screenEnd();
     case "resultsView": return screenResultsView();
+    case "roomCreate": return screenRoomCreate();
+    case "roomJoin": return screenRoomJoin();
+    case "roomLobby": return screenRoomLobby();
+    case "roomEnd": return screenRoomEnd();
     default: return document.createElement("div");
   }
 }
@@ -1108,6 +1203,18 @@ function screenStart() {
         .join("")}
     </div>
     <button class="btn btn-primary btn-lg ${!state.gameLength || !state.difficulty ? "btn-look-disabled" : ""}" id="startBtn">Start Game</button>
+    <div class="room-entry-row">
+      ${
+        window.QuizzyRoom?.isReady
+          ? `
+        <button class="btn btn-ghost" id="createRoomBtn">Create a Room</button>
+        <button class="btn btn-ghost" id="joinRoomBtn">Join a Room</button>
+      `
+          : window.QuizzyRoom?.isUnavailable
+          ? `<p class="tagline">Multiplayer rooms are unavailable right now.</p>`
+          : `<p class="tagline">Loading multiplayer…</p>`
+      }
+    </div>
   `;
   card.querySelectorAll(".length-card[data-len]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1133,6 +1240,21 @@ function screenStart() {
     state.screen = "wheel";
     render();
   });
+  const createRoomBtn = card.querySelector("#createRoomBtn");
+  if (createRoomBtn) {
+    createRoomBtn.addEventListener("click", () => {
+      state.screen = "roomCreate";
+      render();
+    });
+  }
+  const joinRoomBtn = card.querySelector("#joinRoomBtn");
+  if (joinRoomBtn) {
+    joinRoomBtn.addEventListener("click", () => {
+      state.roomJoinError = null;
+      state.screen = "roomJoin";
+      render();
+    });
+  }
   return card;
 }
 
@@ -1194,6 +1316,7 @@ function screenWheel() {
     <h2 class="screen-title">Spin for your topic</h2>
     <p class="tagline game-settings-line">${DIFFICULTY_LEVELS[state.difficulty].label} · ${state.gameLength} Questions</p>
     ${state.isReplay ? `<p class="tagline">🎯 Playing a friend's exact quiz</p>` : ""}
+    ${state.room ? `<p class="tagline">🧑‍🤝‍🧑 Room ${state.room.code} — everyone gets the same questions</p>` : ""}
     <div class="wheel-stage">
       <div class="wheel-pointer"></div>
       <div class="wheel" id="wheel" style="background: conic-gradient(${gradientStops}); transform: rotate(${state.wheelRotation}deg);">
@@ -1222,8 +1345,8 @@ function screenWheel() {
     spinBtn.disabled = true;
     activeSpinToken += 1;
     const mySpinToken = activeSpinToken;
-    const topic = state.isReplay
-      ? state.replayQueue[state.round].t
+    const topic = state.isReplay || state.room
+      ? currentQueueSpec().t
       : TOPIC_ORDER[Math.floor(Math.random() * TOPIC_ORDER.length)];
     const matchingIdx = segTopics.map((t, i) => (t === topic ? i : -1)).filter((i) => i >= 0);
     const idx = matchingIdx[Math.floor(Math.random() * matchingIdx.length)];
@@ -1240,7 +1363,8 @@ function screenWheel() {
     setTimeout(() => {
       if (mySpinToken !== activeSpinToken) return; // superseded by a later spin - ignore
       state.current.topic = topic;
-      state.current.question = state.isReplay ? pickQuestionFromSpec(state.replayQueue[state.round]) : pickQuestion(topic);
+      state.current.question =
+        state.isReplay || state.room ? pickQuestionFromSpec(currentQueueSpec()) : pickQuestion(topic);
       state.current.totSelection = null;
       state.current.totSubmitted = false;
       state.current.selectedPlayer = null;
@@ -1387,6 +1511,43 @@ function renderHintConfirmModal() {
   return overlay;
 }
 
+function renderStandingsModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const players = (state.room?.players || []).slice().sort((a, b) => b.totalScore - a.totalScore);
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <h2 class="screen-title">Live Standings</h2>
+      <div class="modal-body">
+        <div class="room-player-list">
+          ${players
+            .map(
+              (p) => `
+            <div class="room-player-row">
+              <span>${p.name}${p.isHost ? " · Host" : ""}</span>
+              <span class="${p.totalScore >= 0 ? "score-positive" : "score-negative"}">${p.totalScore > 0 ? "+" : ""}${p.totalScore}</span>
+              <span class="room-player-progress">${p.history?.length || 0}/${state.room.gameLength}</span>
+            </div>`
+            )
+            .join("")}
+        </div>
+      </div>
+      <button class="btn btn-primary btn-lg" id="standingsCloseBtn">Close</button>
+    </div>
+  `;
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) {
+      state.showStandings = false;
+      render();
+    }
+  });
+  overlay.querySelector("#standingsCloseBtn").addEventListener("click", () => {
+    state.showStandings = false;
+    render();
+  });
+  return overlay;
+}
+
 function screenQuestion() {
   const topic = state.current.topic;
   if (topic === "thisOrThat") return screenThisOrThat();
@@ -1414,6 +1575,7 @@ function screenQuestion() {
       guessedRaw: null,
       spec: questionReplaySpec(topic, q),
     });
+    syncRoomRound();
     stopTimer();
     state.screen = "result";
     render();
@@ -1509,6 +1671,7 @@ function screenQuestion() {
           : guessed,
       spec: questionReplaySpec(topic, q),
     });
+    syncRoomRound();
     stopTimer();
     state.screen = "result";
     render();
@@ -1758,6 +1921,7 @@ function screenThisOrThat() {
         guessedRaw: null,
         spec: questionReplaySpec(topic, q),
       });
+      syncRoomRound();
       stopTimer();
       state.screen = "result";
       render();
@@ -1849,6 +2013,7 @@ function screenThisOrThat() {
         guessedRaw: state.current.totSelection,
         spec: questionReplaySpec(topic, q),
       });
+      syncRoomRound();
       state.screen = "result";
       render();
     });
@@ -1934,6 +2099,17 @@ function screenResult() {
     card.appendChild(scoreCard);
   }
 
+  if (state.room) {
+    const standingsBtn = document.createElement("button");
+    standingsBtn.className = "btn btn-ghost";
+    standingsBtn.textContent = "🏆 Standings";
+    standingsBtn.addEventListener("click", () => {
+      state.showStandings = true;
+      render();
+    });
+    card.appendChild(standingsBtn);
+  }
+
   const nextBtn = document.createElement("button");
   nextBtn.className = "btn btn-primary btn-lg";
   const isLast = state.round + 1 >= state.gameLength;
@@ -1953,7 +2129,7 @@ function screenResult() {
       totSubmitted: false,
     };
     if (state.round >= state.gameLength) {
-      state.screen = "end";
+      state.screen = state.room ? "roomEnd" : "end";
     } else {
       state.screen = "wheel";
     }
@@ -2276,6 +2452,309 @@ function screenResultsView() {
   return card;
 }
 
+// Resets every field that carries progress from a previous game in this same
+// browser tab (score, history, used wagers/questions) - needed because
+// creating or joining a room reuses state.gameLength/state.difficulty/etc.
+// directly rather than going through freshState(), so a leftover solo game
+// played earlier in the session would otherwise bleed into the room game.
+function resetGameProgress() {
+  state.totalScore = 0;
+  state.history = [];
+  state.usedWagers = new Set();
+  state.round = 0;
+  state.usedQuestionIds = freshState().usedQuestionIds;
+}
+
+function screenRoomCreate() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <h2 class="screen-title">Create a Room</h2>
+    <div class="form-field">
+      <input type="text" class="search-input" id="roomHostName" placeholder="Your name" autocomplete="off" maxlength="20" value="${state.roomHostName.replace(/"/g, "&quot;")}" />
+    </div>
+    <h2 class="screen-title">How many questions?</h2>
+    <div class="choice-row">
+      <button class="length-card ${state.gameLength === 5 ? "selected" : ""}" data-len="5">
+        <div class="length-num">5</div>
+        <div class="length-label">Quick Game</div>
+      </button>
+      <button class="length-card ${state.gameLength === 10 ? "selected" : ""}" data-len="10">
+        <div class="length-num">10</div>
+        <div class="length-label">Full Game</div>
+      </button>
+    </div>
+    <h2 class="screen-title">Choose your difficulty</h2>
+    <div class="choice-row">
+      ${Object.entries(DIFFICULTY_LEVELS)
+        .map(
+          ([key, d]) => `
+        <button class="length-card difficulty-card ${state.difficulty === key ? "selected" : ""}" data-diff="${key}">
+          <div class="difficulty-label">${d.label}</div>
+          <div class="length-label">${d.description}</div>
+        </button>
+      `
+        )
+        .join("")}
+    </div>
+    ${state.roomJoinError ? `<div class="replay-expired-banner">${state.roomJoinError}</div>` : ""}
+    <button class="btn btn-primary btn-lg" id="createRoomSubmitBtn">Create Room</button>
+    <button class="btn btn-ghost" id="roomBackBtn">Back</button>
+  `;
+  // the picker buttons below call render() on click, which rebuilds this
+  // whole card from scratch - the name input has to be backed by state (like
+  // gameLength/difficulty already are) or a click on either picker would
+  // wipe out whatever the user had already typed.
+  card.querySelector("#roomHostName").addEventListener("input", (e) => {
+    state.roomHostName = e.target.value;
+  });
+  card.querySelectorAll(".length-card[data-len]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.gameLength = Number(btn.dataset.len);
+      render();
+    });
+  });
+  card.querySelectorAll(".difficulty-card").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.difficulty = btn.dataset.diff;
+      render();
+    });
+  });
+  card.querySelector("#roomBackBtn").addEventListener("click", () => {
+    state.roomJoinError = null;
+    state.screen = "start";
+    render();
+  });
+  card.querySelector("#createRoomSubmitBtn").addEventListener("click", async () => {
+    const name = state.roomHostName.trim();
+    if (!name) {
+      state.roomJoinError = "Please enter your name.";
+      render();
+      return;
+    }
+    if (!state.gameLength || !state.difficulty) {
+      state.roomJoinError = "Please choose a question count and difficulty.";
+      render();
+      return;
+    }
+    const btn = card.querySelector("#createRoomSubmitBtn");
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+    resetGameProgress();
+    const specs = generateRoomSpecs(state.gameLength);
+    try {
+      const { code, playerId } = await window.QuizzyRoom.createRoom({
+        hostName: name,
+        difficulty: state.difficulty,
+        gameLength: state.gameLength,
+        specs,
+      });
+      state.room = {
+        code,
+        myPlayerId: playerId,
+        isHost: true,
+        specs,
+        difficulty: state.difficulty,
+        gameLength: state.gameLength,
+        status: "lobby",
+        players: [],
+      };
+      state.roomJoinError = null;
+      ensureRoomSubscription(code);
+      state.screen = "roomLobby";
+      render();
+    } catch {
+      state.roomJoinError = "Couldn't create the room — please try again.";
+      render();
+    }
+  });
+  return card;
+}
+
+function screenRoomJoin() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <h2 class="screen-title">Join a Room</h2>
+    <div class="form-field">
+      <input type="text" class="search-input room-code-input" id="roomCodeInput" placeholder="Room code" autocomplete="off" maxlength="5" value="${state.roomJoinPrefillCode || ""}" />
+    </div>
+    <div class="form-field">
+      <input type="text" class="search-input" id="roomNameInput" placeholder="Your name" autocomplete="off" maxlength="20" />
+    </div>
+    ${state.roomJoinError ? `<div class="replay-expired-banner">${state.roomJoinError}</div>` : ""}
+    <button class="btn btn-primary btn-lg" id="joinRoomSubmitBtn">Join Room</button>
+    <button class="btn btn-ghost" id="roomBackBtn">Back</button>
+  `;
+  card.querySelector("#roomBackBtn").addEventListener("click", () => {
+    state.roomJoinError = null;
+    state.roomJoinPrefillCode = null;
+    state.screen = "start";
+    render();
+  });
+  card.querySelector("#joinRoomSubmitBtn").addEventListener("click", async () => {
+    const code = card.querySelector("#roomCodeInput").value.trim().toUpperCase();
+    const name = card.querySelector("#roomNameInput").value.trim();
+    if (!code || !name) {
+      state.roomJoinError = "Please enter a room code and your name.";
+      render();
+      return;
+    }
+    const btn = card.querySelector("#joinRoomSubmitBtn");
+    btn.disabled = true;
+    btn.textContent = "Joining…";
+    const result = await window.QuizzyRoom.joinRoom({ code, name }).catch(() => ({ error: "unknown" }));
+    if (result.error) {
+      state.roomJoinError =
+        result.error === "not_found"
+          ? "That room code wasn't found."
+          : result.error === "in_progress"
+          ? "That room already started — ask the host for a new one."
+          : "Couldn't join that room — please try again.";
+      render();
+      return;
+    }
+    resetGameProgress();
+    state.difficulty = result.room.difficulty;
+    state.gameLength = result.room.gameLength;
+    state.room = {
+      code,
+      myPlayerId: result.playerId,
+      isHost: false,
+      specs: result.room.specs,
+      difficulty: result.room.difficulty,
+      gameLength: result.room.gameLength,
+      status: result.room.status,
+      players: [],
+    };
+    state.roomJoinError = null;
+    state.roomJoinPrefillCode = null;
+    ensureRoomSubscription(code);
+    state.screen = "roomLobby";
+    render();
+  });
+  return card;
+}
+
+function screenRoomLobby() {
+  const card = document.createElement("div");
+  card.className = "card";
+  const players = state.room.players || [];
+  const siteUrl = `${location.origin}${location.pathname}`;
+  const inviteUrl = `${siteUrl}?room=${state.room.code}`;
+  card.innerHTML = `
+    <h2 class="screen-title">Room Lobby</h2>
+    <p class="tagline game-settings-line">${DIFFICULTY_LEVELS[state.room.difficulty].label} · ${state.room.gameLength} Questions</p>
+    <div class="room-code-display">${state.room.code}</div>
+    <button class="btn btn-ghost" id="shareInviteBtn">Share Invite</button>
+    <h2 class="screen-title">Players (${players.length})</h2>
+    <div class="room-player-list">
+      ${players.map((p) => `<div class="room-player-row">${p.name}${p.isHost ? " · Host" : ""}</div>`).join("")}
+    </div>
+    ${
+      state.room.isHost
+        ? `<button class="btn btn-primary btn-lg ${players.length < 1 ? "btn-look-disabled" : ""}" id="startRoomBtn">Start Game</button>`
+        : `<p class="tagline">Waiting for the host to start the game…</p>`
+    }
+  `;
+  const shareStatus = document.createElement("div");
+  shareStatus.className = "share-status";
+  card.appendChild(shareStatus);
+
+  card.querySelector("#shareInviteBtn").addEventListener("click", () => {
+    openSharePopover(
+      card.querySelector("#shareInviteBtn"),
+      () => ({ text: `Join my Quizzy room! Room code: ${state.room.code}`, url: inviteUrl }),
+      shareStatus,
+      "Copy Invite"
+    );
+  });
+
+  if (state.room.isHost) {
+    card.querySelector("#startRoomBtn").addEventListener("click", () => {
+      if (players.length < 1) return;
+      window.QuizzyRoom.startRoom(state.room.code);
+    });
+  }
+  return card;
+}
+
+// Shared by screenRoomEnd's N-player round breakdown - same shape as the
+// 2-party "side" row template duplicated inline in screenEnd/screenResultsView,
+// generalized to take a pending flag (a player who hasn't reached this round
+// yet has no entry to show a wager/delta for).
+function roundSideHtml(who, wager, delta, guessText, pending) {
+  return `
+    <div class="rrr-side">
+      <div class="rrr-side-main">
+        <span class="rrr-who">${who}</span>
+        <span class="rrr-wager">${pending ? "" : `wagered ${wager}`}</span>
+        <span class="rrr-delta ${pending ? "" : delta >= 0 ? "score-positive" : "score-negative"}">${pending ? "…" : `${delta > 0 ? "+" : ""}${delta}`}</span>
+      </div>
+      <div class="rrr-guess">${guessText}</div>
+    </div>`;
+}
+
+// Live-updating leaderboard + round-by-round breakdown for a room game.
+// Stays on the still-open room subscription (started back in
+// screenRoomCreate/screenRoomJoin, torn down only on "Play Again" below), so
+// scores keep updating here even after this player reaches this screen -
+// they can watch everyone else finish live.
+function screenRoomEnd() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `<h2 class="screen-title">Room Results</h2>`;
+  card.appendChild(gameSettingsLine());
+
+  const players = (state.room.players || []).slice().sort((a, b) => b.totalScore - a.totalScore);
+  const leaderboard = document.createElement("div");
+  leaderboard.className = "room-player-list";
+  leaderboard.innerHTML = players
+    .map(
+      (p, i) => `
+    <div class="room-player-row">
+      <span>${i + 1}. ${p.name}${p.isHost ? " · Host" : ""}</span>
+      <span class="${p.totalScore >= 0 ? "score-positive" : "score-negative"}">${p.totalScore > 0 ? "+" : ""}${p.totalScore}</span>
+      <span class="room-player-progress">${p.history?.length || 0}/${state.room.gameLength}</span>
+    </div>`
+    )
+    .join("");
+  card.appendChild(leaderboard);
+
+  const history = document.createElement("div");
+  history.className = "round-history";
+  history.innerHTML = state.room.specs
+    .map((spec, i) => {
+      const sides = players
+        .map((p) => {
+          const entry = p.history?.[i];
+          if (!entry) return roundSideHtml(p.name, null, 0, "Not answered yet", true);
+          const guessText = entry.correct ? `Answer: ${entry.answer}` : `Guessed ${entry.guessed} — Answer: ${entry.answer}`;
+          return roundSideHtml(p.name, entry.wager, entry.delta, guessText, false);
+        })
+        .join("");
+      return `
+      <div class="round-row-replay">
+        <div class="rrr-topic">#${i + 1} · ${TOPIC_META[spec.t].title}</div>
+        ${sides}
+      </div>`;
+    })
+    .join("");
+  card.appendChild(history);
+
+  const again = document.createElement("button");
+  again.className = "btn btn-primary btn-lg";
+  again.textContent = "Play Again";
+  again.addEventListener("click", () => {
+    teardownRoomSubscription();
+    state = freshState();
+    render();
+  });
+  card.appendChild(again);
+
+  return card;
+}
+
 // ---------- Boot ----------
 async function loadData() {
   const [d, pc, tot, cq, cs, dq, p, fb, as, tc, tm, lu, jn] = await Promise.all([
@@ -2318,6 +2797,10 @@ function readResultsCodeFromURL() {
   return code ? decodeResultsCode(code) : null;
 }
 
+function readRoomCodeFromURL() {
+  return new URLSearchParams(location.search).get("room");
+}
+
 // Question data can get rebuilt/rebalanced over time (new topic, a bug fix
 // like the decade-boundary one, etc.), which can shift or drop the IDs an
 // older Challenge/Results link points to. Rather than silently landing on
@@ -2326,9 +2809,14 @@ function readResultsCodeFromURL() {
 // banner explaining it's expired instead.
 const pendingResults = readResultsCodeFromURL();
 const pendingReplay = pendingResults ? null : readReplayCodeFromURL();
+const pendingRoomCode = pendingResults || pendingReplay ? null : readRoomCodeFromURL();
 
 loadData().then(() => {
-  if (pendingResults) {
+  if (pendingRoomCode) {
+    state.roomJoinPrefillCode = pendingRoomCode.toUpperCase();
+    state.showWelcome = false;
+    state.screen = "roomJoin";
+  } else if (pendingResults) {
     const resolvable = pendingResults.q.every((spec) => pickQuestionFromSpec(spec) !== null);
     if (resolvable) {
       state.resultsQueue = pendingResults.q;
@@ -2353,4 +2841,12 @@ loadData().then(() => {
     }
   }
   render();
+});
+
+// firebase-room.js finishes initializing independently of loadData() above
+// (and can take a moment for the anonymous sign-in round trip) - if the start
+// screen already rendered its "loading multiplayer..." state before that
+// resolves, this re-renders once it's actually ready or definitely isn't.
+window.addEventListener("quizzyroomready", () => {
+  if (state.screen === "start") render();
 });
