@@ -805,13 +805,6 @@ button {
 }
 
 /* ---------- Rooms ---------- */
-.room-entry-row {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-}
 .form-field { margin-bottom: 14px; }
 .room-code-input {
   text-transform: uppercase;

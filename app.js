@@ -160,7 +160,7 @@ const QUESTION_TIME_SECONDS = 60;
 // ---------- State ----------
 function freshState() {
   return {
-    screen: "start",
+    screen: "modeSelect",
     gameLength: null,
     difficulty: null,
     totalScore: 0,
@@ -1153,6 +1153,8 @@ function renderTimer() {
 
 function renderScreen() {
   switch (state.screen) {
+    case "modeSelect": return screenModeSelect();
+    case "multiplayerHome": return screenMultiplayerHome();
     case "start": return screenStart();
     case "wheel": return screenWheel();
     case "wager": return screenWager();
@@ -1169,15 +1171,81 @@ function renderScreen() {
 }
 
 // ---------- Screens ----------
-function screenStart() {
+function screenModeSelect() {
   const card = document.createElement("div");
   card.className = "card";
+  const mpReady = window.QuizzyRoom?.isReady;
+  const mpUnavailable = window.QuizzyRoom?.isUnavailable;
+  const mpLabel = mpUnavailable ? "Multiplayer (Unavailable)" : mpReady ? "Multiplayer" : "Multiplayer (Loading…)";
   card.innerHTML = `
     ${
       state.replayLinkExpired
         ? `<div class="replay-expired-banner">That challenge link isn't valid anymore (it was made before a data update) — here's a fresh game instead!</div>`
         : ""
     }
+    <h2 class="screen-title">Choose a Mode</h2>
+    <div class="choice-row">
+      <button class="length-card" id="soloModeBtn">
+        <div class="length-num">🎯</div>
+        <div class="length-label">Solo</div>
+      </button>
+      <button class="length-card ${!mpReady ? "btn-look-disabled" : ""}" id="multiplayerModeBtn">
+        <div class="length-num">🧑‍🤝‍🧑</div>
+        <div class="length-label">${mpLabel}</div>
+      </button>
+    </div>
+  `;
+  card.querySelector("#soloModeBtn").addEventListener("click", () => {
+    state.screen = "start";
+    render();
+  });
+  card.querySelector("#multiplayerModeBtn").addEventListener("click", () => {
+    if (!mpReady) return;
+    state.roomJoinError = null;
+    state.screen = "multiplayerHome";
+    render();
+  });
+  return card;
+}
+
+function screenMultiplayerHome() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <h2 class="screen-title">Multiplayer</h2>
+    <div class="choice-row">
+      <button class="length-card" id="createRoomBtn">
+        <div class="length-num">➕</div>
+        <div class="length-label">Create a Room</div>
+      </button>
+      <button class="length-card" id="joinRoomBtn">
+        <div class="length-num">🔑</div>
+        <div class="length-label">Join a Room</div>
+      </button>
+    </div>
+    <button class="btn btn-ghost" id="modeBackBtn">Back</button>
+  `;
+  card.querySelector("#createRoomBtn").addEventListener("click", () => {
+    state.roomJoinError = null;
+    state.screen = "roomCreate";
+    render();
+  });
+  card.querySelector("#joinRoomBtn").addEventListener("click", () => {
+    state.roomJoinError = null;
+    state.screen = "roomJoin";
+    render();
+  });
+  card.querySelector("#modeBackBtn").addEventListener("click", () => {
+    state.screen = "modeSelect";
+    render();
+  });
+  return card;
+}
+
+function screenStart() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
     <h2 class="screen-title">How many questions?</h2>
     <div class="choice-row">
       <button class="length-card ${state.gameLength === 5 ? "selected" : ""}" data-len="5">
@@ -1203,18 +1271,7 @@ function screenStart() {
         .join("")}
     </div>
     <button class="btn btn-primary btn-lg ${!state.gameLength || !state.difficulty ? "btn-look-disabled" : ""}" id="startBtn">Start Game</button>
-    <div class="room-entry-row">
-      ${
-        window.QuizzyRoom?.isReady
-          ? `
-        <button class="btn btn-ghost" id="createRoomBtn">Create a Room</button>
-        <button class="btn btn-ghost" id="joinRoomBtn">Join a Room</button>
-      `
-          : window.QuizzyRoom?.isUnavailable
-          ? `<p class="tagline">Multiplayer rooms are unavailable right now.</p>`
-          : `<p class="tagline">Loading multiplayer…</p>`
-      }
-    </div>
+    <button class="btn btn-ghost" id="modeBackBtn">Back</button>
   `;
   card.querySelectorAll(".length-card[data-len]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1240,21 +1297,10 @@ function screenStart() {
     state.screen = "wheel";
     render();
   });
-  const createRoomBtn = card.querySelector("#createRoomBtn");
-  if (createRoomBtn) {
-    createRoomBtn.addEventListener("click", () => {
-      state.screen = "roomCreate";
-      render();
-    });
-  }
-  const joinRoomBtn = card.querySelector("#joinRoomBtn");
-  if (joinRoomBtn) {
-    joinRoomBtn.addEventListener("click", () => {
-      state.roomJoinError = null;
-      state.screen = "roomJoin";
-      render();
-    });
-  }
+  card.querySelector("#modeBackBtn").addEventListener("click", () => {
+    state.screen = "modeSelect";
+    render();
+  });
   return card;
 }
 
@@ -2522,7 +2568,7 @@ function screenRoomCreate() {
   });
   card.querySelector("#roomBackBtn").addEventListener("click", () => {
     state.roomJoinError = null;
-    state.screen = "start";
+    state.screen = "multiplayerHome";
     render();
   });
   card.querySelector("#createRoomSubmitBtn").addEventListener("click", async () => {
@@ -2589,7 +2635,7 @@ function screenRoomJoin() {
   card.querySelector("#roomBackBtn").addEventListener("click", () => {
     state.roomJoinError = null;
     state.roomJoinPrefillCode = null;
-    state.screen = "start";
+    state.screen = "multiplayerHome";
     render();
   });
   card.querySelector("#joinRoomSubmitBtn").addEventListener("click", async () => {
@@ -2844,9 +2890,9 @@ loadData().then(() => {
 });
 
 // firebase-room.js finishes initializing independently of loadData() above
-// (and can take a moment for the anonymous sign-in round trip) - if the start
-// screen already rendered its "loading multiplayer..." state before that
-// resolves, this re-renders once it's actually ready or definitely isn't.
+// (and can take a moment for the anonymous sign-in round trip) - if the mode
+// select screen already rendered its "loading multiplayer..." state before
+// that resolves, this re-renders once it's actually ready or definitely isn't.
 window.addEventListener("quizzyroomready", () => {
-  if (state.screen === "start") render();
+  if (state.screen === "modeSelect") render();
 });
