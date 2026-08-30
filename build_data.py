@@ -1099,7 +1099,44 @@ def main():
         ("ast", "Assists", 0),
         ("3p", "3-Pointers Made", 1979),  # first season with a 3-point line
     ]
-    MIN_GAMES_SEASON_PG = 40  # min games in that season to qualify for a per-game board
+    # Basketball-Reference's real single-season qualification bar for rate
+    # stats (MPG/PPG/RPG/APG/SPG/BPG) has varied a lot by era - a flat 40-game
+    # floor let players well short of the real bar for their season (e.g.
+    # Kendall Marshall's 54-game 2013-14, when the actual requirement was 58)
+    # show up in a "top 5" per-game board. This is the games-only path of
+    # that rule; several eras also allow an alternate "fell short on games
+    # but hit a big cumulative total" qualification (e.g. 2000+ minutes),
+    # which isn't implemented here - a deliberate simplification, since that
+    # needs its own per-stat cumulative thresholds per era.
+    def min_games_for_season_rate_stat(start_year):
+        if start_year <= 1946:
+            return 40
+        if start_year == 1947:
+            return 32
+        if start_year == 1948:
+            return 40
+        if start_year <= 1950:
+            return 46
+        if start_year == 1951:
+            return 44
+        if start_year <= 1956:
+            return 48
+        if start_year <= 1958:
+            return 55
+        if start_year == 1959:
+            return 60
+        if start_year == 1960:
+            return 55
+        if start_year <= 1968:
+            return 65
+        if start_year <= 2010:
+            return 70
+        if start_year == 2011:
+            return 56
+        if start_year == 2012:
+            return 70
+        return 58  # 2013-14 to present
+
     MIN_GAMES_CAREER_PG = MIN_CAREER_GAMES  # min career reg-season games for a per-game board
     MIN_GAMES_PLAYOFF_PG = 25  # playoff sample sizes are much smaller
 
@@ -1165,7 +1202,7 @@ def main():
                         continue
                     raw = s[stat_key if stat_key != "3p" else "tp"]
                     if measure == "perGame":
-                        if games < MIN_GAMES_SEASON_PG:
+                        if games < min_games_for_season_rate_stat(start_year):
                             continue
                         value = round(raw / games, 1)
                     else:
