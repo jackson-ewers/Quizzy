@@ -13,14 +13,15 @@ service cloud.firestore {
 
       allow create: if request.auth != null
                     && request.resource.data.hostId == request.auth.uid
-                    && request.resource.data.status == 'lobby';
+                    && request.resource.data.phase == 'lobby';
 
-      // Only the host can update a room, and only its status field (e.g.
-      // lobby -> inProgress) - the question list and settings are fixed at
-      // creation time.
+      // Any signed-in player (not just the host) can advance the room's
+      // phase/round/deadline - the client-side phase-advance logic is a
+      // compare-and-swap (only commits if phase/roundIndex still match what
+      // it read), so it doesn't matter who actually wins the race to write
+      // it. Nothing else about a room is ever mutated after creation.
       allow update: if request.auth != null
-                    && resource.data.hostId == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['phase', 'roundIndex', 'phaseStartedAt']);
 
       match /players/{playerId} {
         allow read: if true;
@@ -28,9 +29,9 @@ service cloud.firestore {
         allow create: if request.auth != null && request.auth.uid == playerId;
 
         // A player can only ever update their own doc, and only their own
-        // progress fields - never another player's score.
+        // progress/readiness fields - never another player's score.
         allow update: if request.auth != null && request.auth.uid == playerId
-                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['history', 'totalScore', 'finishedAt']);
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['history', 'totalScore', 'finishedAt', 'readyToStart', 'pendingWager', 'pendingWagerRound']);
       }
     }
   }

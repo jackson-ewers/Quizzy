@@ -16,6 +16,7 @@ import {
   arrayUnion,
   increment,
   serverTimestamp,
+  runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import {
   getAuth,
@@ -68,7 +69,9 @@ async function createRoom({ hostName, difficulty, gameLength, specs }) {
       difficulty,
       gameLength,
       specs,
-      status: "lobby",
+      phase: "lobby",
+      roundIndex: 0,
+      phaseStartedAt: serverTimestamp(),
       createdAt: serverTimestamp(),
     });
     await setDoc(doc(db, "rooms", code, "players", uid), {
@@ -78,6 +81,9 @@ async function createRoom({ hostName, difficulty, gameLength, specs }) {
       totalScore: 0,
       joinedAt: serverTimestamp(),
       finishedAt: null,
+      readyToStart: false,
+      pendingWager: null,
+      pendingWagerRound: -1,
     });
     return { code, playerId: uid };
   }
@@ -95,7 +101,7 @@ async function joinRoom({ code, name }) {
   const uid = currentUid();
   const room = await peekRoom(code);
   if (!room) return { error: "not_found" };
-  if (room.status !== "lobby") return { error: "in_progress" };
+  if (room.phase !== "lobby") return { error: "in_progress" };
 
   await setDoc(doc(db, "rooms", code, "players", uid), {
     name,
@@ -104,6 +110,9 @@ async function joinRoom({ code, name }) {
     totalScore: 0,
     joinedAt: serverTimestamp(),
     finishedAt: null,
+    readyToStart: false,
+    pendingWager: null,
+    pendingWagerRound: -1,
   });
   return { room, playerId: uid };
 }
@@ -125,10 +134,37 @@ function subscribeRoom(code, { onRoom, onPlayers }) {
 }
 QuizzyRoom.subscribeRoom = subscribeRoom;
 
-async function startRoom(code) {
-  await updateDoc(doc(db, "rooms", code), { status: "inProgress" });
+async function setReady(code, playerId) {
+  await updateDoc(doc(db, "rooms", code, "players", playerId), { readyToStart: true });
 }
-QuizzyRoom.startRoom = startRoom;
+QuizzyRoom.setReady = setReady;
+
+async function setPendingWager(code, playerId, roundIndex, wager) {
+  await updateDoc(doc(db, "rooms", code, "players", playerId), {
+    pendingWager: wager,
+    pendingWagerRound: roundIndex,
+  });
+}
+QuizzyRoom.setPendingWager = setPendingWager;
+
+// Every phase transition goes through here rather than a plain updateDoc, so
+// that any number of clients racing to advance the same transition (e.g. the
+// last two players finish answering within milliseconds of each other) can't
+// double-advance the room - the transaction only commits if phase/roundIndex
+// still match what this call expects to be leaving, so a client whose view
+// of the room is already stale just silently no-ops instead of clobbering
+// whatever the winning client already wrote.
+async function advancePhase(code, { fromPhase, fromRoundIndex, toPhase, toRoundIndex }) {
+  const roomRef = doc(db, "rooms", code);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(roomRef);
+    if (!snap.exists()) return;
+    const data = snap.data();
+    if (data.phase !== fromPhase || data.roundIndex !== fromRoundIndex) return;
+    tx.update(roomRef, { phase: toPhase, roundIndex: toRoundIndex, phaseStartedAt: serverTimestamp() });
+  });
+}
+QuizzyRoom.advancePhase = advancePhase;
 
 async function submitRoundResult(code, playerId, entry, isLastRound) {
   const update = {

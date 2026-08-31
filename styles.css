@@ -268,6 +268,30 @@ button {
 .length-num { font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
 .length-label { color: var(--text-secondary); font-size: 14px; }
 
+/* ---------- Mode picker ---------- */
+.mode-card-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.mode-card {
+  width: 200px;
+  padding: 28px 20px;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--border);
+  background: var(--surface-solid);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+.mode-card-icon { font-size: 36px; }
+.mode-card-title { font-size: 17px; font-weight: 700; }
+.mode-card-desc { color: var(--text-secondary); font-size: 13px; line-height: 1.4; }
+.mode-card-disabled { opacity: 0.45; cursor: default; }
+
 /* ---------- Wheel ---------- */
 .wheel-stage {
   position: relative;
@@ -1194,6 +1218,7 @@ button {
 @media (hover: hover) and (pointer: fine) {
   .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
   .length-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .mode-card:not(.mode-card-disabled):hover { border-color: var(--accent); transform: translateY(-2px); }
   .wager-btn:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-2px); }
   .hint-btn:hover:not(:disabled) { border-color: var(--accent-2); color: var(--accent-2); }
   .search-result-item:hover { background: color-mix(in srgb, var(--accent-2) 10%, transparent); }

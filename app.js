@@ -157,6 +157,13 @@ const DIFFICULTY_LEVELS = {
 
 const QUESTION_TIME_SECONDS = 60;
 
+// Room mode runs on its own shared clock, separate from solo/replay's
+// mount-relative QUESTION_TIME_SECONDS timer above.
+const ROOM_WAGER_SECONDS = 60;
+const ROOM_QUESTION_SECONDS = 120;
+const ROOM_REVEAL_SECONDS = 10;
+const ROOM_STANDINGS_SECONDS = 8;
+
 // ---------- State ----------
 function freshState() {
   return {
@@ -206,6 +213,8 @@ function freshState() {
       selectedNumber: null,
       totSelection: null,
       totSubmitted: false,
+      autoSpun: false,
+      wagerLocked: false,
     },
   };
 }
@@ -254,6 +263,41 @@ function stopTimer() {
   timerActiveKey = null;
 }
 
+// ---------- Room phase timer ----------
+// A separate singleton from the timer above (never touched by room mode) -
+// this one counts down to a shared deadlineMs (derived from the room doc's
+// phaseStartedAt) rather than a fixed duration from whenever the screen
+// happened to mount, so every player's clock agrees on how much time is
+// left, and a mid-phase refresh shows the correct remaining time instead of
+// a fresh full countdown.
+let roomTimerInterval = null;
+let roomTimerActiveKey = null;
+
+function ensureRoomPhaseTimer(key, deadlineMs, onDeadline) {
+  if (roomTimerActiveKey === key) return;
+  clearInterval(roomTimerInterval);
+  roomTimerActiveKey = key;
+  const tick = () => {
+    const secondsLeft = Math.ceil((deadlineMs - Date.now()) / 1000);
+    const el = document.getElementById("timerDisplay");
+    if (el) el.textContent = formatTimer(Math.max(secondsLeft, 0));
+    if (secondsLeft <= 0) {
+      clearInterval(roomTimerInterval);
+      roomTimerInterval = null;
+      roomTimerActiveKey = null;
+      onDeadline();
+    }
+  };
+  tick();
+  roomTimerInterval = setInterval(tick, 1000);
+}
+
+function stopRoomPhaseTimer() {
+  clearInterval(roomTimerInterval);
+  roomTimerInterval = null;
+  roomTimerActiveKey = null;
+}
+
 // ---------- Room subscription ----------
 // render() reruns on every state change (including trivial ones like typing
 // in a form field), so a Firestore listener can't be wired up inline inside a
@@ -264,6 +308,69 @@ function stopTimer() {
 let roomUnsubscribe = null;
 let roomSubscribedCode = null;
 
+function roomPhaseDurationMs(phase) {
+  if (phase === "wager") return ROOM_WAGER_SECONDS * 1000;
+  if (phase === "question") return ROOM_QUESTION_SECONDS * 1000;
+  if (phase === "reveal") return ROOM_REVEAL_SECONDS * 1000;
+  if (phase === "standings") return ROOM_STANDINGS_SECONDS * 1000;
+  return null; // lobby/finished have no shared clock
+}
+
+function roomIsLastRound() {
+  return state.room.roundIndex + 1 >= state.room.gameLength;
+}
+
+function freshRoundCurrent() {
+  return {
+    topic: null,
+    question: null,
+    wager: null,
+    hintsRevealed: [],
+    pendingHint: null,
+    selectedPlayer: null,
+    selectedCollege: null,
+    selectedNumber: null,
+    totSelection: null,
+    totSubmitted: false,
+    autoSpun: false,
+    wagerLocked: false,
+  };
+}
+
+// Checks whether the room's current phase is ready to move on (every known
+// player has met the phase's condition, or its shared deadline passed) and,
+// if so, fire-and-forget attempts the transition. Safe to call redundantly
+// from many places/many clients at once - advancePhase() is a
+// compare-and-swap, so a call that's already stale (someone else already
+// advanced it) just silently no-ops.
+function maybeAdvanceRoomPhase() {
+  if (!state.room || !state.room.players) return;
+  const { code, phase, roundIndex, players, phaseDeadlineMs } = state.room;
+  const deadlinePassed = phaseDeadlineMs != null && Date.now() >= phaseDeadlineMs;
+
+  const attempt = (toPhase, toRoundIndex) => {
+    window.QuizzyRoom.advancePhase(code, { fromPhase: phase, fromRoundIndex: roundIndex, toPhase, toRoundIndex }).catch(() => {});
+  };
+
+  if (phase === "lobby") {
+    if (players.length >= 2 && players.every((p) => p.readyToStart)) attempt("wager", 0);
+  } else if (phase === "wager") {
+    const allWagered = players.every((p) => p.pendingWagerRound === roundIndex);
+    if (allWagered || deadlinePassed) attempt("question", roundIndex);
+  } else if (phase === "question") {
+    const allAnswered = players.every((p) => (p.history?.length || 0) > roundIndex);
+    if (allAnswered || deadlinePassed) attempt("reveal", roundIndex);
+  } else if (phase === "reveal") {
+    // Standings show after every round, not just the last one.
+    if (deadlinePassed) attempt("standings", roundIndex);
+  } else if (phase === "standings") {
+    if (deadlinePassed) {
+      if (roomIsLastRound()) attempt("finished", roundIndex);
+      else attempt("wager", roundIndex + 1);
+    }
+  }
+}
+
 function ensureRoomSubscription(code) {
   if (roomSubscribedCode === code) return;
   teardownRoomSubscription();
@@ -271,17 +378,37 @@ function ensureRoomSubscription(code) {
   roomUnsubscribe = window.QuizzyRoom.subscribeRoom(code, {
     onRoom: (room) => {
       if (!state.room) return;
-      const wasLobby = state.room.status === "lobby";
+      const oldPhase = state.room.phase;
       state.room = { ...state.room, ...room };
-      if (wasLobby && room.status === "inProgress" && state.screen === "roomLobby") {
-        state.round = 0;
-        state.screen = "wheel";
+      const duration = roomPhaseDurationMs(room.phase);
+      state.room.phaseDeadlineMs = room.phaseStartedAt && duration != null ? room.phaseStartedAt.toMillis() + duration : null;
+      state.round = room.roundIndex;
+
+      if (oldPhase !== room.phase) {
+        if (room.phase === "wager") {
+          // covers both the very first round (lobby -> wager) and every
+          // subsequent round (standings -> wager) - the wheel screen's own
+          // local auto-spin is what moves each client on to the wager UI
+          // itself once its animation finishes.
+          state.current = freshRoundCurrent();
+          state.screen = "wheel";
+        } else if (room.phase === "question") {
+          state.screen = "question";
+        } else if (room.phase === "reveal") {
+          state.screen = "roomReveal";
+        } else if (room.phase === "standings") {
+          state.screen = "roomStandings";
+        } else if (room.phase === "finished") {
+          state.screen = "roomEnd";
+        }
       }
+      maybeAdvanceRoomPhase();
       render();
     },
     onPlayers: (players) => {
       if (!state.room) return;
       state.room.players = players;
+      maybeAdvanceRoomPhase();
       render();
     },
   });
@@ -754,7 +881,7 @@ function syncRoomRound() {
   window.QuizzyRoom.submitRoundResult(
     state.room.code,
     state.room.myPlayerId,
-    { topic: h.topic, wager: h.wager, delta: h.delta, correct: h.correct, guessed: h.guessed, answer: h.answer },
+    { topic: h.topic, wager: h.wager, delta: h.delta, correct: h.correct, guessed: h.guessed, answer: h.answer, hints: h.hints },
     isLastRound
   ).catch(() => {});
 }
@@ -1165,6 +1292,9 @@ function renderScreen() {
     case "roomCreate": return screenRoomCreate();
     case "roomJoin": return screenRoomJoin();
     case "roomLobby": return screenRoomLobby();
+    case "roomWager": return screenRoomWager();
+    case "roomReveal": return screenRoomReveal();
+    case "roomStandings": return screenRoomStandings();
     case "roomEnd": return screenRoomEnd();
     default: return document.createElement("div");
   }
@@ -1176,7 +1306,11 @@ function screenModeSelect() {
   card.className = "card";
   const mpReady = window.QuizzyRoom?.isReady;
   const mpUnavailable = window.QuizzyRoom?.isUnavailable;
-  const mpLabel = mpUnavailable ? "Multiplayer (Unavailable)" : mpReady ? "Multiplayer" : "Multiplayer (Loading…)";
+  const friendDesc = mpUnavailable
+    ? "Unavailable right now."
+    : mpReady
+    ? "Create or join a room and play the same questions together, live."
+    : "Loading…";
   card.innerHTML = `
     ${
       state.replayLinkExpired
@@ -1184,14 +1318,21 @@ function screenModeSelect() {
         : ""
     }
     <h2 class="screen-title">Choose a Mode</h2>
-    <div class="choice-row">
-      <button class="length-card" id="soloModeBtn">
-        <div class="length-num">🎯</div>
-        <div class="length-label">Solo</div>
+    <div class="mode-card-row">
+      <button class="mode-card" id="soloModeBtn">
+        <div class="mode-card-icon">🎯</div>
+        <div class="mode-card-title">Solo</div>
+        <div class="mode-card-desc">Play at your own pace and chase a high score.</div>
       </button>
-      <button class="length-card ${!mpReady ? "btn-look-disabled" : ""}" id="multiplayerModeBtn">
-        <div class="length-num">🧑‍🤝‍🧑</div>
-        <div class="length-label">${mpLabel}</div>
+      <button class="mode-card ${!mpReady ? "mode-card-disabled" : ""}" id="friendModeBtn">
+        <div class="mode-card-icon">🧑‍🤝‍🧑</div>
+        <div class="mode-card-title">Play a Friend</div>
+        <div class="mode-card-desc">${friendDesc}</div>
+      </button>
+      <button class="mode-card mode-card-disabled" id="onlineModeBtn">
+        <div class="mode-card-icon">🌐</div>
+        <div class="mode-card-title">Online</div>
+        <div class="mode-card-desc">Coming soon — get matched with a real opponent or a bot.</div>
       </button>
     </div>
   `;
@@ -1199,7 +1340,7 @@ function screenModeSelect() {
     state.screen = "start";
     render();
   });
-  card.querySelector("#multiplayerModeBtn").addEventListener("click", () => {
+  card.querySelector("#friendModeBtn").addEventListener("click", () => {
     if (!mpReady) return;
     state.roomJoinError = null;
     state.screen = "multiplayerHome";
@@ -1212,7 +1353,7 @@ function screenMultiplayerHome() {
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
-    <h2 class="screen-title">Multiplayer</h2>
+    <h2 class="screen-title">Play a Friend</h2>
     <div class="choice-row">
       <button class="length-card" id="createRoomBtn">
         <div class="length-num">➕</div>
@@ -1380,15 +1521,15 @@ function screenWheel() {
       </div>
     </div>
     <div class="spin-result" id="spinResult"></div>
-    <button class="btn btn-primary btn-lg" id="spinBtn">Spin the Wheel</button>
+    ${state.room ? "" : `<button class="btn btn-primary btn-lg" id="spinBtn">Spin the Wheel</button>`}
   `;
 
   const wheelEl = card.querySelector("#wheel");
   const spinBtn = card.querySelector("#spinBtn");
   const resultEl = card.querySelector("#spinResult");
 
-  spinBtn.addEventListener("click", () => {
-    spinBtn.disabled = true;
+  function runSpin() {
+    if (spinBtn) spinBtn.disabled = true;
     activeSpinToken += 1;
     const mySpinToken = activeSpinToken;
     const topic = state.isReplay || state.room
@@ -1422,11 +1563,21 @@ function screenWheel() {
       resultEl.style.color = TOPIC_META[topic].color;
       setTimeout(() => {
         if (mySpinToken !== activeSpinToken) return;
-        state.screen = "wager";
+        state.screen = state.room ? "roomWager" : "wager";
         render();
       }, 700);
     }, WHEEL_SPIN_MS);
-  });
+  }
+
+  if (spinBtn) {
+    spinBtn.addEventListener("click", runSpin);
+  } else if (state.room && !state.current.autoSpun) {
+    // Room mode never shows a clickable spin button - the topic is already
+    // fixed by the room's shared question list, so every player's wheel just
+    // plays the same animation automatically the moment this round begins.
+    state.current.autoSpun = true;
+    runSpin();
+  }
 
   return card;
 }
@@ -1485,6 +1636,94 @@ function screenWager() {
   return card;
 }
 
+// Room mode's timed, shared-clock counterpart to screenWager() above - kept
+// completely separate so solo/replay's untimed screenWager() never needs a
+// state.room branch. Every player sees the same wager grid; locking in
+// writes to Firestore instead of navigating anywhere - the room's phase
+// advancing (once everyone's locked in or the clock runs out) is what
+// actually moves every player on to the question screen together.
+function screenRoomWager() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.appendChild(scoreBadge());
+  card.appendChild(progressBar());
+  card.appendChild(statusBar());
+
+  const topic = state.current.topic;
+  const title = document.createElement("h2");
+  title.className = "screen-title";
+  title.innerHTML = `<span class="topic-badge" style="color:${TOPIC_META[topic].color}">${TOPIC_META[topic].title}</span>`;
+  card.appendChild(title);
+
+  const desc = document.createElement("p");
+  desc.className = "tagline";
+  desc.textContent = TOPIC_META[topic].description;
+  card.appendChild(desc);
+
+  card.appendChild(renderTimer());
+
+  const lockInWager = (wager) => {
+    state.usedWagers.add(wager);
+    state.current.wager = wager;
+    state.current.wagerLocked = true;
+    window.QuizzyRoom.setPendingWager(state.room.code, state.room.myPlayerId, state.room.roundIndex, wager).catch(() => {});
+    render();
+  };
+
+  ensureRoomPhaseTimer(`wager-${state.room.roundIndex}`, state.room.phaseDeadlineMs, () => {
+    if (!state.current.wagerLocked) {
+      const options = availableWagers();
+      const fallback = options[Math.floor(Math.random() * options.length)];
+      lockInWager(fallback);
+    }
+  });
+
+  if (state.current.wagerLocked) {
+    const players = state.room.players || [];
+    const waiting = waitingOnNames(players, (p) => p.pendingWagerRound === state.room.roundIndex, state.room.myPlayerId);
+    const confirmEl = document.createElement("p");
+    confirmEl.className = "tagline";
+    confirmEl.innerHTML = `You wagered <strong>${state.current.wager}</strong>.`;
+    card.appendChild(confirmEl);
+    const waitEl = document.createElement("p");
+    waitEl.className = "tagline";
+    waitEl.textContent = waiting.length ? `Waiting on: ${formatWaitingList(waiting)}` : "Everyone's locked in — moving on…";
+    card.appendChild(waitEl);
+    return card;
+  }
+
+  const sub = document.createElement("p");
+  sub.className = "tagline";
+  sub.textContent = "Choose how many points to wager on this round. Each number can only be used once.";
+  card.appendChild(sub);
+
+  const grid = document.createElement("div");
+  grid.className = "wager-grid";
+  for (let i = 1; i <= maxWager(); i++) {
+    const btn = document.createElement("button");
+    btn.className = "wager-btn";
+    btn.textContent = i;
+    const used = state.usedWagers.has(i);
+    btn.disabled = used;
+    if (state.current.wager === i) btn.classList.add("selected");
+    btn.addEventListener("click", () => {
+      state.current.wager = i;
+      render();
+    });
+    grid.appendChild(btn);
+  }
+  card.appendChild(grid);
+
+  const confirmBtn = document.createElement("button");
+  confirmBtn.className = "btn btn-primary btn-lg";
+  confirmBtn.textContent = "Lock In Wager";
+  confirmBtn.disabled = state.current.wager === null;
+  confirmBtn.addEventListener("click", () => lockInWager(state.current.wager));
+  card.appendChild(confirmBtn);
+
+  return card;
+}
+
 // Shared hint row for every topic: renders a labeled section so hints read as
 // hints (not just plain buttons), and routes every reveal through a confirm
 // popup rather than revealing instantly on tap.
@@ -1522,7 +1761,10 @@ function confirmPendingHint() {
   const pending = state.current.pendingHint;
   if (pending && !state.current.hintsRevealed.includes(pending.key)) {
     state.current.hintsRevealed.push(pending.key);
-    resetTimer();
+    // Room mode runs on a shared clock everyone else is also counting down -
+    // resetting it for just the player who used a hint would desync them
+    // from the room, so only solo/replay's own per-player timer resets here.
+    if (!state.room) resetTimer();
   }
   state.current.pendingHint = null;
   render();
@@ -1598,6 +1840,14 @@ function screenQuestion() {
   const topic = state.current.topic;
   if (topic === "thisOrThat") return screenThisOrThat();
 
+  // This player already submitted/timed out on this round - stay put and
+  // show who the room's still waiting on, rather than the question form
+  // again. The room's phase advancing (Step 6) is what moves everyone on to
+  // the reveal screen together once the room is ready.
+  if (state.room && state.history.length > state.round) {
+    return roomWaitingCard(state.history[state.round]);
+  }
+
   const card = document.createElement("div");
   card.className = "card";
   card.appendChild(scoreBadge());
@@ -1606,26 +1856,48 @@ function screenQuestion() {
 
   const q = state.current.question;
 
-  ensureTimer(`round-${state.round}`, () => {
-    const hintCount = state.current.hintsRevealed.length;
-    const delta = computePayout(state.current.wager, hintCount, false);
-    state.totalScore += delta;
-    state.history.push({
-      topic,
-      wager: state.current.wager,
-      hints: hintCount,
-      correct: false,
-      delta,
-      answer: correctAnswerName(topic, q),
-      guessed: "(ran out of time)",
-      guessedRaw: null,
-      spec: questionReplaySpec(topic, q),
+  if (state.room) {
+    ensureRoomPhaseTimer(`question-${state.room.roundIndex}`, state.room.phaseDeadlineMs, () => {
+      const hintCount = state.current.hintsRevealed.length;
+      const delta = computePayout(state.current.wager, hintCount, false);
+      state.totalScore += delta;
+      state.history.push({
+        topic,
+        wager: state.current.wager,
+        hints: hintCount,
+        correct: false,
+        delta,
+        answer: correctAnswerName(topic, q),
+        guessed: "(ran out of time)",
+        guessedRaw: null,
+        spec: questionReplaySpec(topic, q),
+      });
+      syncRoomRound();
+      stopRoomPhaseTimer();
+      render();
     });
-    syncRoomRound();
-    stopTimer();
-    state.screen = "result";
-    render();
-  });
+  } else {
+    ensureTimer(`round-${state.round}`, () => {
+      const hintCount = state.current.hintsRevealed.length;
+      const delta = computePayout(state.current.wager, hintCount, false);
+      state.totalScore += delta;
+      state.history.push({
+        topic,
+        wager: state.current.wager,
+        hints: hintCount,
+        correct: false,
+        delta,
+        answer: correctAnswerName(topic, q),
+        guessed: "(ran out of time)",
+        guessedRaw: null,
+        spec: questionReplaySpec(topic, q),
+      });
+      syncRoomRound();
+      stopTimer();
+      state.screen = "result";
+      render();
+    });
+  }
 
   const badge = document.createElement("div");
   badge.innerHTML = `<span class="topic-badge" style="color:${TOPIC_META[topic].color}">${TOPIC_META[topic].title}</span>`;
@@ -1718,9 +1990,14 @@ function screenQuestion() {
       spec: questionReplaySpec(topic, q),
     });
     syncRoomRound();
-    stopTimer();
-    state.screen = "result";
-    render();
+    if (state.room) {
+      stopRoomPhaseTimer();
+      render();
+    } else {
+      stopTimer();
+      state.screen = "result";
+      render();
+    }
   });
   card.appendChild(submitBtn);
 
@@ -1939,6 +2216,10 @@ function renderCollegeSearch() {
 }
 
 function screenThisOrThat() {
+  if (state.room && state.history.length > state.round) {
+    return roomWaitingCard(state.history[state.round]);
+  }
+
   const card = document.createElement("div");
   card.className = "card";
   card.appendChild(scoreBadge());
@@ -1952,7 +2233,7 @@ function screenThisOrThat() {
   const hintCount = state.current.hintsRevealed.length;
 
   if (!revealed) {
-    ensureTimer(`round-${state.round}`, () => {
+    const onTimeout = () => {
       const delta = computePayout(state.current.wager, hintCount, false);
       state.totalScore += delta;
       state.history.push({
@@ -1968,10 +2249,20 @@ function screenThisOrThat() {
         spec: questionReplaySpec(topic, q),
       });
       syncRoomRound();
-      stopTimer();
-      state.screen = "result";
-      render();
-    });
+      if (state.room) {
+        stopRoomPhaseTimer();
+        render();
+      } else {
+        stopTimer();
+        state.screen = "result";
+        render();
+      }
+    };
+    if (state.room) {
+      ensureRoomPhaseTimer(`question-${state.room.roundIndex}`, state.room.phaseDeadlineMs, onTimeout);
+    } else {
+      ensureTimer(`round-${state.round}`, onTimeout);
+    }
   }
 
   const badge = document.createElement("div");
@@ -2060,7 +2351,7 @@ function screenThisOrThat() {
         spec: questionReplaySpec(topic, q),
       });
       syncRoomRound();
-      state.screen = "result";
+      if (!state.room) state.screen = "result";
       render();
     });
     card.appendChild(finishBtn);
@@ -2077,6 +2368,7 @@ function screenThisOrThat() {
   submitBtn.disabled = state.current.totSelection === null;
   submitBtn.addEventListener("click", () => {
     stopTimer();
+    if (state.room) stopRoomPhaseTimer();
     state.current.totSubmitted = true;
     render();
   });
@@ -2173,9 +2465,11 @@ function screenResult() {
       selectedNumber: null,
       totSelection: null,
       totSubmitted: false,
+      autoSpun: false,
+      wagerLocked: false,
     };
     if (state.round >= state.gameLength) {
-      state.screen = state.room ? "roomEnd" : "end";
+      state.screen = "end";
     } else {
       state.screen = "wheel";
     }
@@ -2602,7 +2896,9 @@ function screenRoomCreate() {
         specs,
         difficulty: state.difficulty,
         gameLength: state.gameLength,
-        status: "lobby",
+        phase: "lobby",
+        roundIndex: 0,
+        phaseDeadlineMs: null,
         players: [],
       };
       state.roomJoinError = null;
@@ -2670,7 +2966,9 @@ function screenRoomJoin() {
       specs: result.room.specs,
       difficulty: result.room.difficulty,
       gameLength: result.room.gameLength,
-      status: result.room.status,
+      phase: result.room.phase,
+      roundIndex: result.room.roundIndex,
+      phaseDeadlineMs: null,
       players: [],
     };
     state.roomJoinError = null;
@@ -2682,10 +2980,60 @@ function screenRoomJoin() {
   return card;
 }
 
+// Shared by the lobby ready-check and the wager/question waiting states -
+// everywhere a player needs to see who the room is still waiting on.
+function waitingOnNames(players, isReadyFn, myPlayerId) {
+  return players.filter((p) => p.id !== myPlayerId && !isReadyFn(p)).map((p) => p.name);
+}
+
+function formatWaitingList(names) {
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+// Shown in place of the question/this-or-that form once this player has
+// already submitted or timed out for the current round - the room's phase
+// advancing to "reveal" (once everyone's answered or the clock runs out) is
+// what moves everyone on together, not anything this player does here.
+function roomWaitingCard(lastEntry) {
+  stopRoomPhaseTimer(); // defensive - every path into this card should have already stopped it itself
+  const card = document.createElement("div");
+  card.className = "card";
+  card.appendChild(scoreBadge());
+  card.appendChild(progressBar());
+  card.appendChild(statusBar());
+
+  const title = document.createElement("h2");
+  title.className = "screen-title";
+  title.textContent = "Answer Locked In";
+  card.appendChild(title);
+
+  const resultLine = document.createElement("p");
+  resultLine.className = "tagline";
+  resultLine.textContent =
+    lastEntry.guessed === "(ran out of time)" ? "⏰ Time ran out." : lastEntry.correct ? "✅ Correct!" : "❌ Not quite.";
+  card.appendChild(resultLine);
+
+  const players = state.room.players || [];
+  const waiting = waitingOnNames(players, (p) => (p.history?.length || 0) > state.round, state.room.myPlayerId);
+  const waitLine = document.createElement("p");
+  waitLine.className = "tagline";
+  waitLine.textContent = waiting.length ? `Waiting on: ${formatWaitingList(waiting)}` : "Everyone's answered — moving on…";
+  card.appendChild(waitLine);
+
+  return card;
+}
+
 function screenRoomLobby() {
   const card = document.createElement("div");
   card.className = "card";
   const players = state.room.players || [];
+  const me = players.find((p) => p.id === state.room.myPlayerId);
+  const iAmReady = !!me?.readyToStart;
+  const enoughPlayers = players.length >= 2;
+  const waiting = waitingOnNames(players, (p) => p.readyToStart, state.room.myPlayerId);
   const siteUrl = `${location.origin}${location.pathname}`;
   const inviteUrl = `${siteUrl}?room=${state.room.code}`;
   card.innerHTML = `
@@ -2695,12 +3043,22 @@ function screenRoomLobby() {
     <button class="btn btn-ghost" id="shareInviteBtn">Share Invite</button>
     <h2 class="screen-title">Players (${players.length})</h2>
     <div class="room-player-list">
-      ${players.map((p) => `<div class="room-player-row">${p.name}${p.isHost ? " · Host" : ""}</div>`).join("")}
+      ${players
+        .map(
+          (p) => `
+        <div class="room-player-row">
+          <span>${p.name}${p.isHost ? " · Host" : ""}</span>
+          ${p.readyToStart ? `<span class="score-positive">Ready</span>` : ""}
+        </div>`
+        )
+        .join("")}
     </div>
     ${
-      state.room.isHost
-        ? `<button class="btn btn-primary btn-lg ${players.length < 1 ? "btn-look-disabled" : ""}" id="startRoomBtn">Start Game</button>`
-        : `<p class="tagline">Waiting for the host to start the game…</p>`
+      !enoughPlayers
+        ? `<p class="tagline">Waiting for a friend to join…</p>`
+        : iAmReady
+        ? `<p class="tagline">${waiting.length ? `Waiting on: ${formatWaitingList(waiting)}` : "Everyone's ready — starting…"}</p>`
+        : `<button class="btn btn-primary btn-lg" id="readyBtn">I'm Ready</button>`
     }
   `;
   const shareStatus = document.createElement("div");
@@ -2716,20 +3074,19 @@ function screenRoomLobby() {
     );
   });
 
-  if (state.room.isHost) {
-    card.querySelector("#startRoomBtn").addEventListener("click", () => {
-      if (players.length < 1) return;
-      window.QuizzyRoom.startRoom(state.room.code);
-    });
-  }
+  card.querySelector("#readyBtn")?.addEventListener("click", () => {
+    window.QuizzyRoom.setReady(state.room.code, state.room.myPlayerId).catch(() => {});
+  });
+
   return card;
 }
 
 // Shared by screenRoomEnd's N-player round breakdown - same shape as the
 // 2-party "side" row template duplicated inline in screenEnd/screenResultsView,
 // generalized to take a pending flag (a player who hasn't reached this round
-// yet has no entry to show a wager/delta for).
-function roundSideHtml(who, wager, delta, guessText, pending) {
+// yet has no entry to show a wager/delta for) and an optional hints count.
+function roundSideHtml(who, wager, delta, guessText, pending, hints) {
+  const hintsText = !pending && hints ? ` · ${hints} hint${hints === 1 ? "" : "s"} used` : "";
   return `
     <div class="rrr-side">
       <div class="rrr-side-main">
@@ -2737,8 +3094,82 @@ function roundSideHtml(who, wager, delta, guessText, pending) {
         <span class="rrr-wager">${pending ? "" : `wagered ${wager}`}</span>
         <span class="rrr-delta ${pending ? "" : delta >= 0 ? "score-positive" : "score-negative"}">${pending ? "…" : `${delta > 0 ? "+" : ""}${delta}`}</span>
       </div>
-      <div class="rrr-guess">${guessText}</div>
+      <div class="rrr-guess">${guessText}${hintsText}</div>
     </div>`;
+}
+
+// Live-updating per-round breakdown, shown to the whole room together right
+// after everyone's answered (or the question clock ran out) - the reveal
+// counterpart to the wager/question waiting screens, generalizing
+// screenRoomEnd's "every round, every player" table down to just this round.
+function screenRoomReveal() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `<h2 class="screen-title">Round Results</h2>`;
+  card.appendChild(gameSettingsLine());
+  card.appendChild(renderTimer());
+
+  const roundIndex = state.room.roundIndex;
+  const spec = state.room.specs[roundIndex];
+  const q = pickQuestionFromSpec(spec);
+  const answer = q ? correctAnswerName(spec.t, q) : "—";
+
+  const answerLine = document.createElement("p");
+  answerLine.className = "tagline";
+  answerLine.innerHTML = `#${roundIndex + 1} · <span class="topic-badge" style="color:${TOPIC_META[spec.t].color}">${TOPIC_META[spec.t].title}</span> — the answer was <strong>${answer}</strong>`;
+  card.appendChild(answerLine);
+
+  const players = (state.room.players || []).slice().sort((a, b) => b.totalScore - a.totalScore);
+  const sidesHtml = players
+    .map((p) => {
+      const entry = p.history?.[roundIndex];
+      if (!entry) return roundSideHtml(p.name, null, 0, "Not answered", true);
+      const guessText = entry.correct ? `Answer: ${entry.answer}` : `Guessed ${entry.guessed} — Answer: ${entry.answer}`;
+      return roundSideHtml(p.name, entry.wager, entry.delta, guessText, false, entry.hints);
+    })
+    .join("");
+  const roundBlock = document.createElement("div");
+  roundBlock.className = "round-row-replay";
+  roundBlock.innerHTML = sidesHtml;
+  card.appendChild(roundBlock);
+
+  ensureRoomPhaseTimer(`reveal-${roundIndex}`, state.room.phaseDeadlineMs, () => {
+    maybeAdvanceRoomPhase();
+  });
+
+  return card;
+}
+
+// Auto-advancing standings screen between rounds (or before the final
+// results) - promotes renderStandingsModal's content from a manually-opened
+// modal into a real screen the whole room sees together for a fixed beat.
+function screenRoomStandings() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `<h2 class="screen-title">Standings</h2>`;
+  card.appendChild(gameSettingsLine());
+  card.appendChild(renderTimer());
+
+  const players = (state.room.players || []).slice().sort((a, b) => b.totalScore - a.totalScore);
+  const list = document.createElement("div");
+  list.className = "room-player-list";
+  list.innerHTML = players
+    .map(
+      (p, i) => `
+      <div class="room-player-row">
+        <span>${i + 1}. ${p.name}${p.isHost ? " · Host" : ""}</span>
+        <span class="${p.totalScore >= 0 ? "score-positive" : "score-negative"}">${p.totalScore > 0 ? "+" : ""}${p.totalScore}</span>
+        <span class="room-player-progress">${p.history?.length || 0}/${state.room.gameLength}</span>
+      </div>`
+    )
+    .join("");
+  card.appendChild(list);
+
+  ensureRoomPhaseTimer(`standings-${state.room.roundIndex}`, state.room.phaseDeadlineMs, () => {
+    maybeAdvanceRoomPhase();
+  });
+
+  return card;
 }
 
 // Live-updating leaderboard + round-by-round breakdown for a room game.
@@ -2776,7 +3207,7 @@ function screenRoomEnd() {
           const entry = p.history?.[i];
           if (!entry) return roundSideHtml(p.name, null, 0, "Not answered yet", true);
           const guessText = entry.correct ? `Answer: ${entry.answer}` : `Guessed ${entry.guessed} — Answer: ${entry.answer}`;
-          return roundSideHtml(p.name, entry.wager, entry.delta, guessText, false);
+          return roundSideHtml(p.name, entry.wager, entry.delta, guessText, false, entry.hints);
         })
         .join("");
       return `
