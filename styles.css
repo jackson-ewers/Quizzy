@@ -734,6 +734,18 @@ button {
   font-size: 12px;
   color: var(--text-secondary);
 }
+.rrr-answer {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+.rr-guess-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  padding: 3px 0;
+}
 
 .replay-scorecard {
   width: 100%;

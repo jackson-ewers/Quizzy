@@ -274,9 +274,6 @@ let roomTimerInterval = null;
 let roomTimerActiveKey = null;
 
 function ensureRoomPhaseTimer(key, deadlineMs, onDeadline) {
-  if (roomTimerActiveKey === key) return;
-  clearInterval(roomTimerInterval);
-  roomTimerActiveKey = key;
   const tick = () => {
     const secondsLeft = Math.ceil((deadlineMs - Date.now()) / 1000);
     const el = document.getElementById("timerDisplay");
@@ -288,6 +285,17 @@ function ensureRoomPhaseTimer(key, deadlineMs, onDeadline) {
       onDeadline();
     }
   };
+  if (roomTimerActiveKey === key) {
+    // Interval's already running - but every render() call rebuilds the DOM
+    // from scratch, and renderTimer() stamps in the *solo* timer's stale
+    // seconds-left on mount, clobbering whatever this interval last wrote.
+    // Re-tick immediately so the freshly-mounted display shows the correct
+    // value right away instead of waiting up to a second for the next tick.
+    tick();
+    return;
+  }
+  clearInterval(roomTimerInterval);
+  roomTimerActiveKey = key;
   tick();
   roomTimerInterval = setInterval(tick, 1000);
 }
@@ -403,13 +411,15 @@ function ensureRoomSubscription(code) {
         }
       }
       maybeAdvanceRoomPhase();
-      render();
+      // state is kept current either way - only the visual re-render is
+      // deferred, so it can't cut the wheel's spin animation short.
+      if (!roomSpinInProgress) render();
     },
     onPlayers: (players) => {
       if (!state.room) return;
       state.room.players = players;
       maybeAdvanceRoomPhase();
-      render();
+      if (!roomSpinInProgress) render();
     },
   });
 }
@@ -1270,12 +1280,21 @@ function progressBar() {
   return div;
 }
 
-function renderTimer() {
+// initialSecondsLeft lets room mode stamp in the correct value right away -
+// ensureRoomPhaseTimer's own corrective tick() can't do this itself, since
+// it runs before this card is attached to the live document (getElementById
+// finds nothing yet), so without this the display would show solo's
+// unrelated timerSecondsLeft for up to a second after every re-render.
+function renderTimer(initialSecondsLeft) {
   const el = document.createElement("div");
   el.className = "timer-display";
   el.id = "timerDisplay";
-  el.textContent = formatTimer(timerSecondsLeft);
+  el.textContent = formatTimer(initialSecondsLeft ?? timerSecondsLeft);
   return el;
+}
+
+function roomSecondsLeft() {
+  return state.room?.phaseDeadlineMs != null ? Math.max(0, Math.ceil((state.room.phaseDeadlineMs - Date.now()) / 1000)) : 0;
 }
 
 function renderScreen() {
@@ -1462,6 +1481,15 @@ const WHEEL_LABEL_OVERRIDES = {
 // token so a stale spin's callbacks become no-ops once superseded.
 let activeSpinToken = 0;
 
+// render() tears down and rebuilds the entire DOM, which kills the wheel's
+// CSS rotation transition stone dead if it happens mid-spin. In room mode
+// that's a real risk - render() fires from the room subscription any time
+// any player's data changes (readiness, a wager, an answer), which can
+// easily land inside the ~5s spin window. This flag lets the room
+// subscription defer those renders until the spin's own final render()
+// call, rather than visually cutting the animation short.
+let roomSpinInProgress = false;
+
 function screenWheel() {
   const card = document.createElement("div");
   card.className = "card";
@@ -1530,6 +1558,7 @@ function screenWheel() {
 
   function runSpin() {
     if (spinBtn) spinBtn.disabled = true;
+    if (state.room) roomSpinInProgress = true;
     activeSpinToken += 1;
     const mySpinToken = activeSpinToken;
     const topic = state.isReplay || state.room
@@ -1563,6 +1592,7 @@ function screenWheel() {
       resultEl.style.color = TOPIC_META[topic].color;
       setTimeout(() => {
         if (mySpinToken !== activeSpinToken) return;
+        roomSpinInProgress = false;
         state.screen = state.room ? "roomWager" : "wager";
         render();
       }, 700);
@@ -1660,7 +1690,7 @@ function screenRoomWager() {
   desc.textContent = TOPIC_META[topic].description;
   card.appendChild(desc);
 
-  card.appendChild(renderTimer());
+  card.appendChild(renderTimer(roomSecondsLeft()));
 
   const lockInWager = (wager) => {
     state.usedWagers.add(wager);
@@ -1696,6 +1726,18 @@ function screenRoomWager() {
   sub.className = "tagline";
   sub.textContent = "Choose how many points to wager on this round. Each number can only be used once.";
   card.appendChild(sub);
+
+  const alreadyIn = readyNames(
+    state.room.players || [],
+    (p) => p.pendingWagerRound === state.room.roundIndex,
+    state.room.myPlayerId
+  );
+  if (alreadyIn.length) {
+    const alreadyInEl = document.createElement("p");
+    alreadyInEl.className = "tagline";
+    alreadyInEl.textContent = `${formatWaitingList(alreadyIn)} ${alreadyIn.length === 1 ? "has" : "have"} already locked in.`;
+    card.appendChild(alreadyInEl);
+  }
 
   const grid = document.createElement("div");
   grid.className = "wager-grid";
@@ -1903,7 +1945,21 @@ function screenQuestion() {
   badge.innerHTML = `<span class="topic-badge" style="color:${TOPIC_META[topic].color}">${TOPIC_META[topic].title}</span>`;
   card.appendChild(badge);
 
-  card.appendChild(renderTimer());
+  card.appendChild(renderTimer(state.room ? roomSecondsLeft() : undefined));
+
+  if (state.room) {
+    const alreadyAnswered = readyNames(
+      state.room.players || [],
+      (p) => (p.history?.length || 0) > state.round,
+      state.room.myPlayerId
+    );
+    if (alreadyAnswered.length) {
+      const alreadyEl = document.createElement("p");
+      alreadyEl.className = "tagline";
+      alreadyEl.textContent = `${formatWaitingList(alreadyAnswered)} ${alreadyAnswered.length === 1 ? "has" : "have"} already answered.`;
+      card.appendChild(alreadyEl);
+    }
+  }
 
   const qBlock = document.createElement("div");
   qBlock.className = "question-block";
@@ -2269,7 +2325,22 @@ function screenThisOrThat() {
   badge.innerHTML = `<span class="topic-badge" style="color:${TOPIC_META.thisOrThat.color}">${TOPIC_META.thisOrThat.title}</span>`;
   card.appendChild(badge);
 
-  if (!revealed) card.appendChild(renderTimer());
+  if (!revealed) {
+    card.appendChild(renderTimer(state.room ? roomSecondsLeft() : undefined));
+    if (state.room) {
+      const alreadyAnswered = readyNames(
+        state.room.players || [],
+        (p) => (p.history?.length || 0) > state.round,
+        state.room.myPlayerId
+      );
+      if (alreadyAnswered.length) {
+        const alreadyEl = document.createElement("p");
+        alreadyEl.className = "tagline";
+        alreadyEl.textContent = `${formatWaitingList(alreadyAnswered)} ${alreadyAnswered.length === 1 ? "has" : "have"} already answered.`;
+        card.appendChild(alreadyEl);
+      }
+    }
+  }
 
   const header = document.createElement("div");
   header.className = "question-block";
@@ -2986,6 +3057,13 @@ function waitingOnNames(players, isReadyFn, myPlayerId) {
   return players.filter((p) => p.id !== myPlayerId && !isReadyFn(p)).map((p) => p.name);
 }
 
+// The inverse - who's already locked in/answered, shown alongside the
+// interactive wager/question form itself (not just after this player has
+// submitted) so nobody's left wondering whether anyone else has moved yet.
+function readyNames(players, isReadyFn, myPlayerId) {
+  return players.filter((p) => p.id !== myPlayerId && isReadyFn(p)).map((p) => p.name);
+}
+
 function formatWaitingList(names) {
   if (names.length === 0) return "";
   if (names.length === 1) return names[0];
@@ -3107,7 +3185,7 @@ function screenRoomReveal() {
   card.className = "card";
   card.innerHTML = `<h2 class="screen-title">Round Results</h2>`;
   card.appendChild(gameSettingsLine());
-  card.appendChild(renderTimer());
+  card.appendChild(renderTimer(roomSecondsLeft()));
 
   const roundIndex = state.room.roundIndex;
   const spec = state.room.specs[roundIndex];
@@ -3148,7 +3226,7 @@ function screenRoomStandings() {
   card.className = "card";
   card.innerHTML = `<h2 class="screen-title">Standings</h2>`;
   card.appendChild(gameSettingsLine());
-  card.appendChild(renderTimer());
+  card.appendChild(renderTimer(roomSecondsLeft()));
 
   const players = (state.room.players || []).slice().sort((a, b) => b.totalScore - a.totalScore);
   const list = document.createElement("div");
@@ -3184,6 +3262,15 @@ function screenRoomEnd() {
   card.appendChild(gameSettingsLine());
 
   const players = (state.room.players || []).slice().sort((a, b) => b.totalScore - a.totalScore);
+
+  const maxScore = players.length ? Math.max(...players.map((p) => p.totalScore)) : 0;
+  const winners = players.filter((p) => p.totalScore === maxScore);
+  const outcomeLabel = winners.length > 1 ? "It's a Tie!" : `${winners[0].name} Wins! 🎉`;
+  const banner = document.createElement("div");
+  banner.className = "replay-outcome";
+  banner.innerHTML = `<div class="replay-outcome-title">${outcomeLabel}</div>`;
+  card.appendChild(banner);
+
   const leaderboard = document.createElement("div");
   leaderboard.className = "room-player-list";
   leaderboard.innerHTML = players
@@ -3192,7 +3279,6 @@ function screenRoomEnd() {
     <div class="room-player-row">
       <span>${i + 1}. ${p.name}${p.isHost ? " · Host" : ""}</span>
       <span class="${p.totalScore >= 0 ? "score-positive" : "score-negative"}">${p.totalScore > 0 ? "+" : ""}${p.totalScore}</span>
-      <span class="room-player-progress">${p.history?.length || 0}/${state.room.gameLength}</span>
     </div>`
     )
     .join("");
@@ -3202,18 +3288,21 @@ function screenRoomEnd() {
   history.className = "round-history";
   history.innerHTML = state.room.specs
     .map((spec, i) => {
-      const sides = players
+      const q = pickQuestionFromSpec(spec);
+      const answer = q ? correctAnswerName(spec.t, q) : "—";
+      const rows = players
         .map((p) => {
           const entry = p.history?.[i];
-          if (!entry) return roundSideHtml(p.name, null, 0, "Not answered yet", true);
-          const guessText = entry.correct ? `Answer: ${entry.answer}` : `Guessed ${entry.guessed} — Answer: ${entry.answer}`;
-          return roundSideHtml(p.name, entry.wager, entry.delta, guessText, false, entry.hints);
+          if (!entry) return `<div class="rr-guess-row"><span>${p.name}</span><span class="score-negative">No answer</span></div>`;
+          const cls = entry.correct ? "score-positive" : "score-negative";
+          return `<div class="rr-guess-row"><span>${p.name}</span><span class="${cls}">${entry.guessed}</span></div>`;
         })
         .join("");
       return `
       <div class="round-row-replay">
         <div class="rrr-topic">#${i + 1} · ${TOPIC_META[spec.t].title}</div>
-        ${sides}
+        <div class="rrr-answer">Answer: ${answer}</div>
+        ${rows}
       </div>`;
     })
     .join("");
