@@ -1332,7 +1332,7 @@ function screenModeSelect() {
       <button class="mode-card mode-card-disabled" id="onlineModeBtn">
         <div class="mode-card-icon">🌐</div>
         <div class="mode-card-title">Online</div>
-        <div class="mode-card-desc">Coming soon — get matched with a real opponent or a bot.</div>
+        <div class="mode-card-desc">Coming soon — get matched with a real opponent.</div>
       </button>
     </div>
   `;

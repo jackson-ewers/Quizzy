@@ -288,7 +288,7 @@ button {
   transition: all 0.2s ease;
 }
 .mode-card-icon { font-size: 36px; }
-.mode-card-title { font-size: 17px; font-weight: 700; }
+.mode-card-title { font-size: 17px; font-weight: 700; color: var(--text); }
 .mode-card-desc { color: var(--text-secondary); font-size: 13px; line-height: 1.4; }
 .mode-card-disabled { opacity: 0.45; cursor: default; }
 
