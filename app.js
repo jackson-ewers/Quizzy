@@ -1309,7 +1309,7 @@ function screenModeSelect() {
   const friendDesc = mpUnavailable
     ? "Unavailable right now."
     : mpReady
-    ? "Start a room, invite a friend, and answer the same questions together in real time."
+    ? "Create or join a room and go up against your friends."
     : "Loading…";
   card.innerHTML = `
     ${
