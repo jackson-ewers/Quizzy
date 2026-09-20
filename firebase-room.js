@@ -147,6 +147,17 @@ async function setPendingWager(code, playerId, roundIndex, wager) {
 }
 QuizzyRoom.setPendingWager = setPendingWager;
 
+// A player's own "Next" click on the reveal/standings screens - acks are
+// scoped to a specific phase+round so a stale ack from an earlier round
+// never accidentally counts toward the current one.
+async function setRoomAck(code, playerId, phase, roundIndex) {
+  await updateDoc(doc(db, "rooms", code, "players", playerId), {
+    ackPhase: phase,
+    ackRoundIndex: roundIndex,
+  });
+}
+QuizzyRoom.setRoomAck = setRoomAck;
+
 // Every phase transition goes through here rather than a plain updateDoc, so
 // that any number of clients racing to advance the same transition (e.g. the
 // last two players finish answering within milliseconds of each other) can't

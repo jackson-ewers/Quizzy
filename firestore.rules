@@ -31,7 +31,7 @@ service cloud.firestore {
         // A player can only ever update their own doc, and only their own
         // progress/readiness fields - never another player's score.
         allow update: if request.auth != null && request.auth.uid == playerId
-                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['history', 'totalScore', 'finishedAt', 'readyToStart', 'pendingWager', 'pendingWagerRound']);
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['history', 'totalScore', 'finishedAt', 'readyToStart', 'pendingWager', 'pendingWagerRound', 'ackPhase', 'ackRoundIndex']);
       }
     }
   }

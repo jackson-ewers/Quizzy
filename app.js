@@ -161,8 +161,11 @@ const QUESTION_TIME_SECONDS = 60;
 // mount-relative QUESTION_TIME_SECONDS timer above.
 const ROOM_WAGER_SECONDS = 60;
 const ROOM_QUESTION_SECONDS = 120;
-const ROOM_REVEAL_SECONDS = 10;
-const ROOM_STANDINGS_SECONDS = 8;
+// Reveal/standings no longer auto-advance on a visible clock - everyone
+// clicks "Next" instead. These are just a hidden safety net so a room with a
+// disconnected player doesn't wait forever for a click that's never coming.
+const ROOM_REVEAL_SECONDS = 45;
+const ROOM_STANDINGS_SECONDS = 45;
 
 // ---------- State ----------
 function freshState() {
@@ -369,10 +372,14 @@ function maybeAdvanceRoomPhase() {
     const allAnswered = players.every((p) => (p.history?.length || 0) > roundIndex);
     if (allAnswered || deadlinePassed) attempt("reveal", roundIndex);
   } else if (phase === "reveal") {
-    // Standings show after every round, not just the last one.
-    if (deadlinePassed) attempt("standings", roundIndex);
+    // Standings show after every round, not just the last one. Advance once
+    // everyone's clicked "Next" - the deadline is just a fallback in case
+    // someone's disconnected and never will.
+    const allAcked = players.every((p) => p.ackPhase === "reveal" && p.ackRoundIndex === roundIndex);
+    if (allAcked || deadlinePassed) attempt("standings", roundIndex);
   } else if (phase === "standings") {
-    if (deadlinePassed) {
+    const allAcked = players.every((p) => p.ackPhase === "standings" && p.ackRoundIndex === roundIndex);
+    if (allAcked || deadlinePassed) {
       if (roomIsLastRound()) attempt("finished", roundIndex);
       else attempt("wager", roundIndex + 1);
     }
@@ -1605,8 +1612,21 @@ function screenWheel() {
     // Room mode never shows a clickable spin button - the topic is already
     // fixed by the room's shared question list, so every player's wheel just
     // plays the same animation automatically the moment this round begins.
+    //
+    // The wheel div is still sitting in an unattached `card` at this point
+    // (screenWheel() hasn't returned yet, so render() hasn't appended it to
+    // the document) - if runSpin() mutated its transform right now, the
+    // browser would never get a chance to paint the "at rest" rotation
+    // first, so there'd be nothing for the CSS transition to animate from
+    // and the wheel would just silently jump straight to its final angle.
+    // Wait two animation frames (guaranteeing an actual paint happens in
+    // between) before changing the transform. Also flip roomSpinInProgress
+    // on immediately, not just once runSpin() itself starts, so a Firestore
+    // snapshot landing during this short wait can't sneak in a re-render and
+    // wipe out the freshly-mounted wheel before it ever gets to spin.
     state.current.autoSpun = true;
-    runSpin();
+    roomSpinInProgress = true;
+    requestAnimationFrame(() => requestAnimationFrame(runSpin));
   }
 
   return card;
@@ -1844,27 +1864,14 @@ function renderHintConfirmModal() {
 function renderStandingsModal() {
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
-  const players = (state.room?.players || []).slice().sort((a, b) => b.totalScore - a.totalScore);
   overlay.innerHTML = `
     <div class="modal-card">
       <h2 class="screen-title">Live Standings</h2>
-      <div class="modal-body">
-        <div class="room-player-list">
-          ${players
-            .map(
-              (p) => `
-            <div class="room-player-row">
-              <span>${p.name}${p.isHost ? " · Host" : ""}</span>
-              <span class="${p.totalScore >= 0 ? "score-positive" : "score-negative"}">${p.totalScore > 0 ? "+" : ""}${p.totalScore}</span>
-              <span class="room-player-progress">${p.history?.length || 0}/${state.room.gameLength}</span>
-            </div>`
-            )
-            .join("")}
-        </div>
-      </div>
+      <div class="modal-body" id="standingsModalBody"></div>
       <button class="btn btn-primary btn-lg" id="standingsCloseBtn">Close</button>
     </div>
   `;
+  overlay.querySelector("#standingsModalBody").appendChild(renderLeaderboard(state.room?.players || [], { showProgress: true }));
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) {
       state.showStandings = false;
@@ -3064,6 +3071,64 @@ function readyNames(players, isReadyFn, myPlayerId) {
   return players.filter((p) => p.id !== myPlayerId && isReadyFn(p)).map((p) => p.name);
 }
 
+// Shared by the reveal/standings screens - a "Next" button that writes this
+// player's own ack for the given phase/round, or (once clicked) a "waiting
+// on X" line, exactly like the lobby's ready-button pattern. Nobody needs a
+// countdown to know when to move on - the room moves on the moment everyone
+// still connected has clicked.
+function roomAckControls(phase, roundIndex) {
+  const players = state.room.players || [];
+  const isAcked = (p) => p.ackPhase === phase && p.ackRoundIndex === roundIndex;
+  const me = players.find((p) => p.id === state.room.myPlayerId);
+  const iHaveAcked = !!me && isAcked(me);
+  const waiting = waitingOnNames(players, isAcked, state.room.myPlayerId);
+
+  const wrap = document.createElement("div");
+  wrap.className = "room-ack-controls";
+  if (iHaveAcked) {
+    const p = document.createElement("p");
+    p.className = "tagline";
+    p.textContent = waiting.length ? `Waiting on: ${formatWaitingList(waiting)}` : "Everyone's ready — moving on…";
+    wrap.appendChild(p);
+  } else {
+    const btn = document.createElement("button");
+    btn.className = "btn btn-primary btn-lg";
+    btn.textContent = "Next";
+    btn.addEventListener("click", () => {
+      window.QuizzyRoom.setRoomAck(state.room.code, state.room.myPlayerId, phase, roundIndex).catch(() => {});
+    });
+    wrap.appendChild(btn);
+  }
+  return wrap;
+}
+
+// Shared leaderboard look for the standings screen and the final room
+// results - ranked rows with a medal for the top 3, the current player
+// called out, and the leader highlighted.
+function renderLeaderboard(players, { showProgress = false } = {}) {
+  const sorted = players.slice().sort((a, b) => b.totalScore - a.totalScore);
+  const list = document.createElement("div");
+  list.className = "leaderboard";
+  list.innerHTML = sorted
+    .map((p, i) => {
+      const rank = i + 1;
+      const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank;
+      const isMe = p.id === state.room.myPlayerId;
+      const progress = showProgress
+        ? `<span class="lb-progress">${p.history?.length || 0}/${state.room.gameLength}</span>`
+        : "";
+      return `
+        <div class="lb-row${rank === 1 ? " lb-row-first" : ""}${isMe ? " lb-row-me" : ""}">
+          <span class="lb-rank">${medal}</span>
+          <span class="lb-name">${p.name}${p.isHost ? " · Host" : ""}${isMe ? " · You" : ""}</span>
+          ${progress}
+          <span class="lb-score ${p.totalScore >= 0 ? "score-positive" : "score-negative"}">${p.totalScore > 0 ? "+" : ""}${p.totalScore}</span>
+        </div>`;
+    })
+    .join("");
+  return list;
+}
+
 function formatWaitingList(names) {
   if (names.length === 0) return "";
   if (names.length === 1) return names[0];
@@ -3185,7 +3250,6 @@ function screenRoomReveal() {
   card.className = "card";
   card.innerHTML = `<h2 class="screen-title">Round Results</h2>`;
   card.appendChild(gameSettingsLine());
-  card.appendChild(renderTimer(roomSecondsLeft()));
 
   const roundIndex = state.room.roundIndex;
   const spec = state.room.specs[roundIndex];
@@ -3211,6 +3275,11 @@ function screenRoomReveal() {
   roundBlock.innerHTML = sidesHtml;
   card.appendChild(roundBlock);
 
+  card.appendChild(roomAckControls("reveal", roundIndex));
+
+  // Not shown anywhere in the UI - purely a background safety net so a room
+  // with a disconnected player doesn't wait forever for a "Next" click that
+  // will never come. See ROOM_REVEAL_SECONDS.
   ensureRoomPhaseTimer(`reveal-${roundIndex}`, state.room.phaseDeadlineMs, () => {
     maybeAdvanceRoomPhase();
   });
@@ -3226,23 +3295,14 @@ function screenRoomStandings() {
   card.className = "card";
   card.innerHTML = `<h2 class="screen-title">Standings</h2>`;
   card.appendChild(gameSettingsLine());
-  card.appendChild(renderTimer(roomSecondsLeft()));
 
-  const players = (state.room.players || []).slice().sort((a, b) => b.totalScore - a.totalScore);
-  const list = document.createElement("div");
-  list.className = "room-player-list";
-  list.innerHTML = players
-    .map(
-      (p, i) => `
-      <div class="room-player-row">
-        <span>${i + 1}. ${p.name}${p.isHost ? " · Host" : ""}</span>
-        <span class="${p.totalScore >= 0 ? "score-positive" : "score-negative"}">${p.totalScore > 0 ? "+" : ""}${p.totalScore}</span>
-        <span class="room-player-progress">${p.history?.length || 0}/${state.room.gameLength}</span>
-      </div>`
-    )
-    .join("");
-  card.appendChild(list);
+  card.appendChild(renderLeaderboard(state.room.players || [], { showProgress: true }));
 
+  card.appendChild(roomAckControls("standings", state.room.roundIndex));
+
+  // Not shown anywhere in the UI - purely a background safety net so a room
+  // with a disconnected player doesn't wait forever for a "Next" click that
+  // will never come. See ROOM_STANDINGS_SECONDS.
   ensureRoomPhaseTimer(`standings-${state.room.roundIndex}`, state.room.phaseDeadlineMs, () => {
     maybeAdvanceRoomPhase();
   });
@@ -3271,18 +3331,7 @@ function screenRoomEnd() {
   banner.innerHTML = `<div class="replay-outcome-title">${outcomeLabel}</div>`;
   card.appendChild(banner);
 
-  const leaderboard = document.createElement("div");
-  leaderboard.className = "room-player-list";
-  leaderboard.innerHTML = players
-    .map(
-      (p, i) => `
-    <div class="room-player-row">
-      <span>${i + 1}. ${p.name}${p.isHost ? " · Host" : ""}</span>
-      <span class="${p.totalScore >= 0 ? "score-positive" : "score-negative"}">${p.totalScore > 0 ? "+" : ""}${p.totalScore}</span>
-    </div>`
-    )
-    .join("");
-  card.appendChild(leaderboard);
+  card.appendChild(renderLeaderboard(players, {}));
 
   const history = document.createElement("div");
   history.className = "round-history";
