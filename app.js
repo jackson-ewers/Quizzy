@@ -3095,7 +3095,17 @@ function roomAckControls(phase, roundIndex) {
     btn.className = "btn btn-primary btn-lg";
     btn.textContent = "Next";
     btn.addEventListener("click", () => {
-      window.QuizzyRoom.setRoomAck(state.room.code, state.room.myPlayerId, phase, roundIndex).catch(() => {});
+      window.QuizzyRoom.setRoomAck(state.room.code, state.room.myPlayerId, phase, roundIndex).catch((e) => {
+        // Swallowed everywhere else in room mode, but this one's worth a
+        // console trace - a silently-rejected ack write looks, from the
+        // player's side, exactly like a broken "Next" button (it just sits
+        // there until the hidden fallback timer eventually bails everyone
+        // out). The most likely cause is the live Firestore rules not
+        // matching firestore.rules - e.g. a permission-denied here almost
+        // always means the console rules haven't been updated to allow the
+        // ackPhase/ackRoundIndex fields.
+        console.error("[Quizzy] setRoomAck failed - \"Next\" will silently do nothing until the room's hidden fallback timer advances it:", e);
+      });
     });
     wrap.appendChild(btn);
   }
