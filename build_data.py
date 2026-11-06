@@ -1437,6 +1437,13 @@ def main():
         if len(pids) != 5:
             continue  # historical ties for the last spot don't fit a 5-player board
         start_year = int(season.split("-")[0])
+        # The label shown to the user names the season by the year it ends
+        # (e.g. "2017" for the 2016-17 season) - matching how every other
+        # topic refers to a season (full "2016-17" strings, and awards_YEAR
+        # pages scraped by end year) - not the season's start year, which
+        # would silently point at the wrong season (e.g. "2017" meaning the
+        # 2017-18 team instead).
+        end_year = start_year + 1
         entries = []
         for pid in pids:
             p = players.get(pid)
@@ -1462,7 +1469,7 @@ def main():
             {
                 "id": bid,
                 "statKey": award_type,
-                "statLabel": f"{start_year} {team_ordinal} Team {award_type}",
+                "statLabel": f"{end_year} {team_ordinal} Team {award_type}",
                 "measure": "roster",
                 "scope": "season",
                 "format": "team",
