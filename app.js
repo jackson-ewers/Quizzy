@@ -214,6 +214,7 @@ function freshState() {
       selectedPlayer: null,
       selectedCollege: null,
       selectedNumber: null,
+      answerSearchTerm: "",
       totSelection: null,
       totSubmitted: false,
       autoSpun: false,
@@ -341,6 +342,7 @@ function freshRoundCurrent() {
     selectedPlayer: null,
     selectedCollege: null,
     selectedNumber: null,
+    answerSearchTerm: "",
     totSelection: null,
     totSubmitted: false,
     autoSpun: false,
@@ -2161,6 +2163,7 @@ function renderPlayerSearch() {
     `;
     wrap.querySelector("#changePlayerBtn").addEventListener("click", () => {
       state.current.selectedPlayer = null;
+      state.current.answerSearchTerm = "";
       render();
     });
     return wrap;
@@ -2174,8 +2177,7 @@ function renderPlayerSearch() {
   const input = wrap.querySelector("#playerSearchInput");
   const results = wrap.querySelector("#playerSearchResults");
 
-  input.addEventListener("input", () => {
-    const term = input.value.trim().toLowerCase();
+  const showMatches = (term) => {
     if (term.length < 2) {
       results.style.display = "none";
       results.innerHTML = "";
@@ -2194,9 +2196,23 @@ function renderPlayerSearch() {
     results.querySelectorAll(".search-result-item").forEach((item) => {
       item.addEventListener("click", () => {
         state.current.selectedPlayer = { id: item.dataset.id, name: item.dataset.name };
+        state.current.answerSearchTerm = "";
         render();
       });
     });
+  };
+
+  // In room mode, the other player answering/wagering rebuilds this whole
+  // screen from scratch (render() tears down the full DOM) - without this,
+  // that would silently wipe out whatever this player had half-typed here.
+  if (state.current.answerSearchTerm) {
+    input.value = state.current.answerSearchTerm;
+    showMatches(state.current.answerSearchTerm.trim().toLowerCase());
+  }
+
+  input.addEventListener("input", () => {
+    state.current.answerSearchTerm = input.value;
+    showMatches(input.value.trim().toLowerCase());
   });
 
   return wrap;
@@ -2237,6 +2253,7 @@ function renderCollegeSearch() {
     `;
     wrap.querySelector("#changeCollegeBtn").addEventListener("click", () => {
       state.current.selectedCollege = null;
+      state.current.answerSearchTerm = "";
       render();
     });
     return wrap;
@@ -2250,8 +2267,7 @@ function renderCollegeSearch() {
   const input = wrap.querySelector("#collegeSearchInput");
   const results = wrap.querySelector("#collegeSearchResults");
 
-  input.addEventListener("input", () => {
-    const term = input.value.trim().toLowerCase();
+  const showMatches = (term) => {
     if (term.length < 2) {
       results.style.display = "none";
       results.innerHTML = "";
@@ -2270,9 +2286,23 @@ function renderCollegeSearch() {
     results.querySelectorAll(".search-result-item").forEach((item) => {
       item.addEventListener("click", () => {
         state.current.selectedCollege = item.dataset.college;
+        state.current.answerSearchTerm = "";
         render();
       });
     });
+  };
+
+  // In room mode, the other player answering/wagering rebuilds this whole
+  // screen from scratch (render() tears down the full DOM) - without this,
+  // that would silently wipe out whatever this player had half-typed here.
+  if (state.current.answerSearchTerm) {
+    input.value = state.current.answerSearchTerm;
+    showMatches(state.current.answerSearchTerm.trim().toLowerCase());
+  }
+
+  input.addEventListener("input", () => {
+    state.current.answerSearchTerm = input.value;
+    showMatches(input.value.trim().toLowerCase());
   });
 
   return wrap;
@@ -2541,6 +2571,7 @@ function screenResult() {
       selectedPlayer: null,
       selectedCollege: null,
       selectedNumber: null,
+      answerSearchTerm: "",
       totSelection: null,
       totSubmitted: false,
       autoSpun: false,
